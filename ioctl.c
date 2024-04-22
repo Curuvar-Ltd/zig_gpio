@@ -6,8 +6,8 @@
 
 
 #define GPIO_MAX_NAME_SIZE 32
-#define GPIO_V2_LINES_MAX 64
-#define GPIO_V2_LINE_NUM_ATTRS_MAX 10
+#define GPIO_V2_MAX_LINES 64
+#define GPIO_V2_MAX_LINE_ATTRS 10
 
 
 struct gpiochip_info {
@@ -36,11 +36,11 @@ struct gpio_v2_line_config {
 	__u32 num_attrs;
 	/* Pad to fill implicit padding and reserve space for future use. */
 	__u32 padding[5];
-	struct gpio_v2_line_config_attribute attrs[GPIO_V2_LINE_NUM_ATTRS_MAX];
+	struct gpio_v2_line_config_attribute attrs[GPIO_V2_MAX_LINE_ATTRS];
 };
 
 struct gpio_v2_line_request {
-	__u32 offsets[GPIO_V2_LINES_MAX];
+	__u32 offsets[GPIO_V2_MAX_LINES];
 	char consumer[GPIO_MAX_NAME_SIZE];
 	struct gpio_v2_line_config config;
 	__u32 num_lines;
@@ -56,7 +56,7 @@ struct gpio_v2_line_info {
 	__u32 offset;
 	__u32 num_attrs;
 	__aligned_u64 flags;
-	struct gpio_v2_line_attribute attrs[GPIO_V2_LINE_NUM_ATTRS_MAX];
+	struct gpio_v2_line_attribute attrs[GPIO_V2_MAX_LINE_ATTRS];
 	/* Space reserved for future use. */
 	__u32 padding[4];
 };

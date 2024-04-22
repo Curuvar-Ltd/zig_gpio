@@ -29,17 +29,30 @@ pub fn build( b: * std.Build ) void
     // =========================================================================
 
     // -------------------------------------------------------------------------
-    //  Add the tests in src/zlibgpiod.zig to the unit tests.
+    //  Add the tests in src/chip.zig to the unit tests.
     // -------------------------------------------------------------------------
 
-    const lib_unit_tests = b.addTest(
+    const chip_tests = b.addTest(
         .{
-            .root_source_file = .{ .path = "src/zlibgpiod.zig" },
+            .root_source_file = .{ .path = "src/chip.zig" },
             .target           = target,
             .optimize         = optimize,
         } );
 
-    const run_lib_unit_tests = b.addRunArtifact( lib_unit_tests );
+    const run_chip_tests = b.addRunArtifact( chip_tests );
+
+    // -------------------------------------------------------------------------
+    //  Add the tests in src/request.zig to the unit tests.
+    // -------------------------------------------------------------------------
+
+    const request_tests = b.addTest(
+        .{
+            .root_source_file = .{ .path = "src/request.zig" },
+            .target           = target,
+            .optimize         = optimize,
+        } );
+
+    const run_request_tests = b.addRunArtifact( request_tests );
 
     // -------------------------------------------------------------------------
     //  Add a step "test" to "zig build" which builds and runs the tests.
@@ -47,5 +60,6 @@ pub fn build( b: * std.Build ) void
 
     const test_step = b.step( "test", "Run unit tests" );
 
-    test_step.dependOn( &run_lib_unit_tests.step );
+    test_step.dependOn( &run_chip_tests.step );
+    test_step.dependOn( &run_request_tests.step );
 }
