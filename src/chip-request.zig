@@ -33,18 +33,36 @@
 
 /// This structure is used to request control of lines from the kernel.
 /// A line must be successfully requested before it value can be returned.
+///
+/// Note that many of the functions defined on the Line structure use a u64
+/// bitmap to indicate which lines to access or what values to set or return.
+/// These bitmaps are reletive to the lines that are "owned" by the bitmap, not
+/// all the lines for the chip.
+///
+/// For example, if this Request "owns" line 4, 7, and 9, then the value for
+/// line 4 will be the low order bit and the other bitmap values look like this:
+///
+///      ~~~~=+---+---+---+
+///           | 9 | 7 | 4 |
+///      ~~~~=+---+---+---+
+///
 
-const std = @import( "std" );
+const std     = @import( "std" );
 
 const Request = @This();
 const Chip    = @import( "chip.zig" );
+const Line    = @import( "chip-request-line.zig" );
+const Ioctl   = @import( "ioctl.zig" );
 
 const log    = std.log.scoped( .chip_request );
 const assert = std.debug.assert;
 
-chip  : * const Chip,
-lines : u64,            // a bitmap of the requested lines.
-fd    : ?std.posix.fd_t = null,
+/// The Chip contining the requested lines.
+chip      : * const Chip,
+/// The stream used to control and read the requested lines.
+fd        : ?std.posix.fd_t = null,
+/// A bitmap of lines requested -- based on line number on the Chip.
+lines     : Chip.LineSet,
 
 // =============================================================================
 //  Private Constants
@@ -55,47 +73,28 @@ const MAX_LINE_ATTRS     = 10;
 const MAX_LINES          = 64;
 const NS_PER_SEC         = 1_000_000_000;
 
-const Ioctl = enum(u32)
-{
-    get_info            = 0x8044B401,
-    line_info           = 0xC100B405,
-    watch_line_info     = 0xC100B406,
-    line_request        = 0xC250B407,
-    unwatch_line_info   = 0xC004B40C,
-    set_line_config     = 0xC110B40D,
-    get_line_values     = 0xC010B40E,
-    set_line_values     = 0xC010B40F,
-};
-
 // =============================================================================
 //  Public Structures
 // =============================================================================
-
-pub const Line = struct
-{
-    request  : * const Request,
-    line     : u6,
-
-    pub const Direction = enum{ input, output };
-    pub const Bias      = enum{ none, pull_up, pull_down };
-};
 
 // =============================================================================
 //  Private Structures
 // =============================================================================
 
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-/// This struct is used to set or get line values.   The mask indicate which
-/// lines to get or set.  The bits indicate the values.
 
-const LineValues = extern struct  //=> struct gpio_v2_line_values {getLineValues, setLineValuse}
-{
-    bits   : u64 align(8),
-    mask   : u64 align(8),
-};
+// =============================================================================
+//  Public Functions
+// =============================================================================
 
-// -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Public Function Request.init
+// -----------------------------------------------------------------------------
+/// Initialize the Request structure.
+///
+/// This function request access to the Request's lines and opens a stream
+/// that is used to control and read the requested lines.
+///
+/// Note: The Request's Chip MUST be initialized before calling this function.
 
 pub fn init( self : *Request, in_consumer : [] const u8 ) !void
 {
@@ -103,19 +102,22 @@ pub fn init( self : *Request, in_consumer : [] const u8 ) !void
 
     self.deinit();
 
-    var req = std.mem.zeroes( Chip.LineRequest );
-    req.fillLines( self.lines );
+    var req = std.mem.zeroes( Ioctl.LineRequest );
+    try req.fillLines( self.lines );
 
     std.mem.copyForwards( u8, &req.consumer, in_consumer );
 
-    _ = try Chip.ioctl( self.chip.fd, .line_request, &req );
+    _ = try Ioctl.ioctl( self.chip.fd, .line_request, &req );
 
-    log.warn( "Request Lines: {any}", .{ req.lines } );
+    log.warn( "Request Lines: {any}", .{ req.lines[0..req.num_lines] } );
 
     self.fd = req.fd;
 }
 
-// -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Public Function Request.deinit
+// -----------------------------------------------------------------------------
+/// Close the stream for this Request.
 
 pub fn deinit( self : *Request ) void
 {
@@ -126,24 +128,233 @@ pub fn deinit( self : *Request ) void
     }
 }
 
-// -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Public Function line
+// -----------------------------------------------------------------------------
+/// Return a Line struct used to control a singe line from this request.
+///
+/// This function may be called before the Request is initialized.
 
-pub fn line( self : Request, in_line : u6 ) !Line
+
+pub fn line( self : *Request, in_line : Chip.LineNum ) Line
 {
     return .{ .request = self, .line = in_line };
 }
 
-// -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Public Function getLineValuesMasked
+// -----------------------------------------------------------------------------
+/// Get a subset of the lines simultaniously as a bitmask.
+///
+/// Parameters:
+/// - in_mask   - a bitmask indicating the lines to get
 
-pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
+pub fn getLineValuesMasked( self    : Request,
+                            in_mask : u64 ) !u64
 {
     if (self.fd) |fd|
     {
-        var lv = LineValues{ .bits = 0, .mask = in_mask };
+        var lv : Ioctl.LineValues = .{ .bits = 0, .mask = in_mask };
 
-        _ = try Chip.ioctl( fd, .get_line_values, &lv );
+        _ = try Ioctl.ioctl( fd, .get_line_values, &lv );
 
         return lv.bits;
+    }
+
+    return error.NotOpen;
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function getLineValues
+// -----------------------------------------------------------------------------
+/// Returns the a slice of optional booleans indexed by line number.
+///
+/// The length of the slice is the number of lines that this Request's
+/// unterlying Chip has (not the number of requesed lines).
+///
+/// The value of each returned item is:
+/// - true  - the line is part of this request and is asserted
+/// - false - the line is part of this request and is not asserted
+/// - null  - the line is not part of this request.
+
+pub fn getLineValues( self : Request ) ![]?bool
+{
+    if (self.fd) |fd|
+    {
+        var lv : Ioctl.LineValues = .{ .bits = 0,
+                                       .mask = 0xFFFF_FFFF_FFFF_FFFF };
+
+        _ = try Ioctl.ioctl( fd, .get_line_values, &lv );
+
+        var retval = try self.chip.allocator.alloc( ?bool,
+                                                    self.chip.info.line_count );
+
+        errdefer self.chip.allocator.free( retval );
+
+        var line_index : Chip.LineNum = 0;
+        var bit_mask   : u64          = 1;
+
+        for (0..self.chip.info.line_count) |i|
+        {
+            if (self.lines.isSet( line_index ))
+            {
+                retval[i] = (lv.bits & bit_mask) != 0;
+                bit_mask <<= 1;
+            }
+            else
+            {
+                retval[i] = null;
+            }
+
+            line_index += 1;
+        }
+
+        return retval;
+    }
+
+    return error.NotOpen;
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function getLineValue
+// -----------------------------------------------------------------------------
+/// Returns the value of a specific line
+///
+/// The value returned is:
+/// - true  - the line is asserted
+/// - false - the line is not asserted
+///
+
+pub fn getLineValue( self : Request, in_line : Chip.LineNum ) !bool
+{
+    if (!self.lines.isSet( in_line )) return error.NotRequested;
+
+    if (self.fd) |fd|
+    {
+        var lv : Ioctl.LineValues = .{ .bits = 0,
+                                       .mask = 0xFFFF_FFFF_FFFF_FFFF };
+
+        _ = try Ioctl.ioctl( fd, .get_line_values, &lv );
+
+        var line_index : Chip.LineNum = 0;
+        var bit_mask   : u64          = 1;
+
+        for (0..self.chip.info.line_count) |i|
+        {
+            if (self.lines.isSet( line_index ))
+            {
+                if (i == in_line) return  (lv.bits & bit_mask) != 0;
+                bit_mask <<= 1;
+            }
+
+            line_index += 1;
+        }
+
+        unreachable;
+    }
+
+    return error.NotOpen;
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function setLineValuesMasked
+// -----------------------------------------------------------------------------
+/// Set a subset of the lines simultaniously.
+///
+/// Parameters:
+/// - in_mask   - a bitmask indicating the lines to set
+/// - in_values - the values to set the lines to
+
+pub fn setLineValuesMasked( self      : Request,
+                            in_mask   : u64,
+                            in_values : u64 ) !void
+{
+    if (self.fd) |fd|
+    {
+        var lv : Ioctl.LineValues = .{ .bits = in_values, .mask = in_mask };
+
+        _ = try Ioctl.ioctl( fd, .set_line_values, &lv );
+
+        return;
+    }
+
+    return error.NotOpen;
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function setLineValues
+// -----------------------------------------------------------------------------
+// /// Set a multiple lines simultaniously.
+// ///
+// /// Parameters
+// /// - in_line_values - a slice of line/value pairs.
+// ///
+// /// Note: If a specific line is specified more than once in the slice, then
+// ///       if any mention of the line specifies the line as active the line
+// ///       will be set active
+
+
+// pub fn setLineValues( self : Chip, in_values : [] const PerLineValue ) !void
+// {
+//     if (in_values.len == 0) return;
+
+//     var lv = LineValues{ .bits = 0, .mask = 0 };
+
+//     for (in_values) |a_line_value|
+//     {
+//         const mask = @as( u64, 1 ) << a_line_value.line;
+
+//         lv.mask |= mask;
+
+//         if (a_line_value.value == .active)
+//         {
+//             lv.bits |= mask;
+//         }
+//     }
+
+//     _ = try self.ioctl( .set_line_values, &lv );
+// }
+
+// -----------------------------------------------------------------------------
+//  Public Function setLineValue
+// -----------------------------------------------------------------------------
+/// Set the value of a specific line
+///
+/// - true  - the line is asserted
+/// - false - the line is not asserted
+///
+
+pub fn setLineValue( self     : Request,
+                     in_line  : Chip.LineNum,
+                     in_value : bool ) !void
+{
+    if (!self.lines.isSet( in_line )) return error.NotRequested;
+
+    if (self.fd) |fd|
+    {
+        var line_index : Chip.LineNum = 0;
+        var bit_mask   : u64          = 1;
+
+        for (0..self.chip.info.line_count) |i|
+        {
+            if (self.lines.isSet( line_index ))
+            {
+                if (i == in_line)
+                {
+                    var lv : Ioctl.LineValues = .{ .bits = if (in_value) bit_mask else 0,
+                                                   .mask = bit_mask };
+
+                    _ = try Ioctl.ioctl( fd, .set_line_values, &lv );
+
+                    return;
+                }
+                bit_mask <<= 1;
+            }
+
+            line_index += 1;
+        }
+
+        unreachable;
     }
 
     return error.NotOpen;
@@ -158,14 +369,14 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 // // -----------------------------------------------------------------------------
 
 // pub fn lineRequest( self           : Chip,
-//                     in_lines       : [] const u6,
+//                     in_lines       : [] const Chip.LineNum,
 //                     in_values      : [] const LineValue,
 //                     in_consumer    : ?[] const u8,
-//                     in_buffer_size : u32 ) !LineRequest
+//                     in_buffer_size : u32 ) !Ioctl.LineInfo
 // {
 //     assert( in_lines.len <= MAX_NAME_SIZE );
 
-//     var req = std.mem.zeroes( LineRequest );
+//     var req = std.mem.zeroes( Ioctl.LineInfo );
 
 //     for (in_lines, 0..) |a_line, i| req.lines[i] = a_line;
 
@@ -246,13 +457,13 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 //  Public Function setLineConfig
 // -----------------------------------------------------------------------------
 
-// pub fn setLineConfig( self : chip, in_line : u6, in_config : lineConfig ) !void
+// pub fn setLineConfig( self : chip, in_line : Chip.LineNum, in_config : lineConfig ) !void
 // {
 
 // }
 
 
-//     var lr = std.mem.zeros( LineRequest );
+//     var lr = std.mem.zeros( Ioctl.LineInfo );
 
 //     if (in_consumer) |c| std.mem.copy( u8, lr.consumer, c ); // ??? Direction
 
@@ -260,7 +471,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 // pub fn setLineConfig( self : Chip, in_request : *LineRequestX, in_config : *LineConfigX )
 // {
-//     var lr = std.mem.zeros( LineRequest );
+//     var lr = std.mem.zeros( Ioctl.LineInfo );
 
 //     lr.num_lines = in_config.num_configs;
 
@@ -307,96 +518,6 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 // // 	}
 
 //     _ = try self.ioctl( .set_line_config, &lr );
-// }
-
-
-// // -----------------------------------------------------------------------------
-// //  Public Function getLineValuesMasked
-// // -----------------------------------------------------------------------------
-
-// pub fn getLineValuesMasked( self : Chip, in_mask : u64 ) !u64
-// {
-//     var lv = LineValues{ .bits = 0, .mask = in_mask };
-
-//     _ = try self.ioctl( .get_line_values, &lv );
-
-//     return lv.bits;
-// }
-
-// // -----------------------------------------------------------------------------
-// //  Public Function getLineValues
-// // -----------------------------------------------------------------------------
-
-// pub fn getLineValues( self : Chip,
-//                       in_values : []PerLineValue ) !void
-// {
-//     if (in_values.len == 0) return;
-
-//     var lv = LineValues{ .bits = 0, .mask = 0 };
-
-//     for (in_values) |a_line_value|
-//     {
-//         lv.mask |= @as( u64, 1 ) << a_line_value.line;
-//     }
-
-//     _ = try self.ioctl( .set_line_values, &lv );
-
-//     for (in_values) |*v|
-//     {
-//         v.value = (if ((lv.bits & (@as( u64, 1 ) << v.line)) != 0) .active else .inactive);
-//     }
-// }
-
-// // -----------------------------------------------------------------------------
-// //  Public Function setLineValuesMasked
-// // -----------------------------------------------------------------------------
-// /// Set a subset of the lines simultaniously
-// ///
-// /// Parameters:
-// /// - in_mask   - a bitmask indicating the lines to set
-// /// - in_values - the values to set the lines to
-
-// pub fn setLineValuesMasked( self      : Chip,
-//                             in_mask   : u64,
-//                             in_values : u64 ) !void
-// {
-//     var lv = LineValues{ .bits = in_values, .mask = in_mask };
-
-//     _ = try self.ioctl( .set_line_values, &lv );
-// }
-
-// // -----------------------------------------------------------------------------
-// //  Public Function setLineValues
-// // -----------------------------------------------------------------------------
-// /// Set a multiple lines simultaniously.
-// ///
-// /// Parameters
-// /// - in_line_values - a slice of line/value pairs.
-// ///
-// /// Note: If a specific line is specified more than once in the slice, then
-// ///       if any mention of the line specifies the line as active the line
-// ///       will be set active
-
-
-// pub fn setLineValues( self : Chip, in_values : [] const PerLineValue ) !void
-// {
-//     if (in_values.len == 0) return;
-
-//     var lv = LineValues{ .bits = 0, .mask = 0 };
-
-//     for (in_values) |a_line_value|
-//     {
-//         const mask = @as( u64, 1 ) << a_line_value.line;
-
-//         lv.mask |= mask;
-
-//         if (a_line_value.value == .active)
-//         {
-//             lv.bits |= mask;
-//         }
-//     }
-
-//     _ = try self.ioctl( .set_line_values, &lv );
 // }
 
 
@@ -490,7 +611,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 // pub const LineXXX = struct
 // {
 //     chip  : * const Chip,
-//     line  : u6,
+//     line  : Chip.LineNum,
 
 //     pub const Direction = enum{ input, output };
 //     pub const Bias      = enum{ none, pull_up, pull_down };
@@ -508,7 +629,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 //     {
 //         var lv = LineValues{ .bits = 0, .mask = @as( u64, 1 ) << self.line };
 
-//         _ = try self.chip.ioctl( .get_line_values, &lv );
+//         _ = try Ioctl.ioctl( .get_line_values, &lv );
 
 //         return (lv.bits & lv.mask) != 0;
 //     }
@@ -525,7 +646,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 //         if (in_value) lv.bits = lv.mask;
 
-//         _ = try self.chip.ioctl( .set_line_values, &lv );
+//         _ = try Ioctl.ioctl( .set_line_values, &lv );
 //     }
 
 //     // -------------------------------------------------------------------------
@@ -534,10 +655,10 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 //     pub fn watch( self : Line ) !void
 //     {
-//         var line_info = std.mem.zeroes( LineInfo );
+//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try self.chip.ioctl( .watch_line_info, &line_info );
+//         _ = try Ioctl.ioctl( .watch_line_info, &line_info );
 //     }
 
 //     // -------------------------------------------------------------------------
@@ -546,22 +667,22 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 //     pub fn unwatch( self : Line ) !void
 //     {
-//         var line_info = std.mem.zeroes( LineInfo );
+//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try self.chip.ioctl( .unwatch_line_info, &line_info );
+//         _ = try Ioctl.ioctl( .unwatch_line_info, &line_info );
 //     }
 
 //     // -------------------------------------------------------------------------
 //     //  Public Function getLineInfo
 //     // -------------------------------------------------------------------------
 
-//     pub fn getLineInfo( self : Line, out_line_info : *LineInfo ) !void
+//     pub fn getLineInfo( self : Line, out_line_info : *Ioctl.LineInfo ) !void
 //     {
-//         out_line_info.* = std.mem.zeroes( LineInfo );
+//         out_line_info.* = std.mem.zeroes( Ioctl.LineInfo );
 //         out_line_info.offset = self.line;
 
-//         _ = try self.chip.ioctl( .line_info, out_line_info );
+//         _ = try Ioctl.ioctl( .line_info, out_line_info );
 //     }
 
 //     // -------------------------------------------------------------------------
@@ -570,10 +691,10 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 //     pub fn direction( self : Line ) !Direction
 //     {
-//         var line_info = std.mem.zeroes( LineInfo );
+//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try self.chip.ioctl( .line_info, &line_info );
+//         _ = try Ioctl.ioctl( .line_info, &line_info );
 
 //         if (line_info.flags.input)
 //         {
@@ -592,10 +713,10 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 //     pub fn bias( self : Line ) !Bias
 //     {
-//         var line_info = std.mem.zeroes( LineInfo );
+//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try self.chip.ioctl( .line_info, &line_info );
+//         _ = try Ioctl.ioctl( .line_info, &line_info );
 
 //         if (line_info.flags.bias_pull_up)
 //         {
@@ -633,7 +754,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 //     bias_pull_down        : bool,
 //     bias_disabled         : bool,
 //     event_clock_realtime  : bool,
-//     event_clock_hte	      : bool,
+//     event_clock_hte	     : bool,
 //     pad                   : u51,
 // };
 
@@ -641,7 +762,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 // // -----------------------------------------------------------------------------
 // /// The line info structure contains basic data about each line of a chip.
 
-// pub const LineInfo = extern struct //=> struct gpio_v2_line_info {getLineInfo, watchLineInfo}
+// pub const Ioctl.LineInfo = extern struct //=> struct gpio_v2_line_info {getLineInfo, watchLineInfo}
 // {
 //     name      : [MAX_NAME_SIZE:0]u8,
 //     consumer  : [MAX_NAME_SIZE:0]u8,
@@ -659,7 +780,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 
 // pub const LineInfoEvent = extern struct    //=> struct gpio_v2_line_info_changed {getLineInfoEvent}
 // {
-//     info       : LineInfo,
+//     info       : Ioctl.LineInfo,
 //     timestamp  : u64 align(8),
 //     event_type : InfoEventType,
 //     pad        : [5]u32,
@@ -704,7 +825,7 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 // // -----------------------------------------------------------------------------
 // // -----------------------------------------------------------------------------
 
-// pub const LineRequest = extern struct //=> struct gpio_v2_line_request {lineRequest, setLineConfig}
+// pub const Ioctl.LineInfo = extern struct //=> struct gpio_v2_line_request {lineRequest, setLineConfig}
 // {
 //     lines             : [MAX_LINES]u32,
 //     consumer          : [MAX_NAME_SIZE:0]u8,
@@ -852,17 +973,6 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 //     debounce_period : c_long,    // in uS
 // };
 
-
-// // -----------------------------------------------------------------------------
-// // -----------------------------------------------------------------------------
-
-// pub const PerLineValue = struct
-// {
-//     line  : u6        = undefined,
-//     value : LineValue = undefined,
-// };
-
-
 // // -----------------------------------------------------------------------------
 // //  Public Function watchLineInfo
 // // -----------------------------------------------------------------------------
@@ -870,13 +980,13 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 // ///
 // /// Params:
 // /// - in_line  - the offset to the line to watch
-// /// - out_info - the LineInfo struct to fill in (must remain valid until unwatch)
+// /// - out_info - the Ioctl.LineInfo struct to fill in (must remain valid until unwatch)
 
 // pub fn watchLineInfo( self     : Chip,
 //                       in_line  : u32,
-//                       out_info : *LineInfo ) !void
+//                       out_info : *Ioctl.LineInfo ) !void
 // {
-//     out_info.* = std.mem.zeroes( LineInfo );
+//     out_info.* = std.mem.zeroes( Ioctl.LineInfo );
 //     out_info.offset = in_line;
 //     _ = try ioctl( self.fd, .watch_line_info, out_info );
 // }
@@ -953,69 +1063,3 @@ pub fn getLineValuesMasked( self : Request, in_mask : u64 ) !u64
 //     }
 // }
 
-
-// =============================================================================
-//  Testing
-// =============================================================================
-
-const testing   = std.testing;
-
-const chip_path =  "/dev/gpiochip0";
-
-// -----------------------------------------------------------------------------
-
-test "line request"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    var req = chip.request( &[_]u6{ 3, 4, 5, 6 } );
-    try req.init( "line request" );
-    defer req.deinit();
-
-    log.warn( "Request fd     {?}",   .{ req.fd } );
-
-    const lv = try req.getLineValuesMasked( 0xFFFF_FFFF_FFFF_FFFB );
-
-    log.warn( "values {b:0>64}", .{ lv } );
-
-    for (0..chip.line_names.len) |i|
-    {
-        var line_info = std.mem.zeroes( Chip.LineInfo );
-        line_info.offset = @intCast( i );
-        _ = try Chip.ioctl( chip.fd, .line_info, &line_info );
-
-        log.warn( "", .{} );
-        log.warn( "line_info.name:       {s}", .{ line_info.name } );
-        log.warn( "line_info.consumer:   {s}", .{ line_info.consumer } );
-        log.warn( "", .{} );
-    }
-}
-
-// -----------------------------------------------------------------------------
-
-test "bad line request"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    var req = chip.request( &[_]u6{ 7 } );
-    try req.init( "bad line request" );
-    defer req.deinit();
-
-    for (0..chip.line_names.len) |i|
-    {
-        var line_info = std.mem.zeroes( Chip.LineInfo );
-        line_info.offset = @intCast( i );
-        _ = try Chip.ioctl( chip.fd, .line_info, &line_info );
-
-        log.warn( "", .{} );
-        log.warn( "line_info.name:       {s}", .{ line_info.name } );
-        log.warn( "line_info.consumer:   {s}", .{ line_info.consumer } );
-        log.warn( "", .{} );
-    }
-}

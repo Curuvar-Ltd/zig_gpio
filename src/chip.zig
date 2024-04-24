@@ -37,9 +37,10 @@ const std = @import( "std" );
 
 const Chip    = @This();
 const Request = @import( "chip-request.zig" );
+const Ioctl   = @import( "ioctl.zig" );
 
-const log    = std.log.scoped( .chip );
-const assert = std.debug.assert;
+const log     = std.log.scoped( .chip );
+const assert  = std.debug.assert;
 
 // =============================================================================
 //  Chip Fields
@@ -48,167 +49,22 @@ const assert = std.debug.assert;
 allocator  : std.mem.Allocator   = undefined,
 path       : ?[] const u8        = null,
 fd         : std.posix.fd_t      = undefined,
-
-info       : extern struct
-             {
-                name       : [MAX_NAME_SIZE:0]u8,
-                label      : [MAX_NAME_SIZE:0]u8,
-                line_count : u32,
-             } = undefined,
-
-line_names : [][] const u8 = undefined,
+info       : Ioctl.ChipInfo      = undefined,
+line_names : [][] const u8       = undefined,
 
 // =============================================================================
 //  Public Constants
 // =============================================================================
 
-
-// =============================================================================
-//  Private Constants
-// =============================================================================
-
-const MAX_NAME_SIZE      = 31;
-const MAX_LINES          = 64;
-const MAX_LINE_ATTRS     = 10;
-
-const Ioctl = enum(u32)
-{
-    get_info            = 0x8044B401,
-    line_info           = 0xC100B405,
-    watch_line_info     = 0xC100B406,
-    line_request        = 0xC250B407,
-    unwatch_line_info   = 0xC004B40C,
-    set_line_config     = 0xC110B40D,
-    get_line_values     = 0xC010B40E,
-    set_line_values     = 0xC010B40F,
-};
-
-pub const LineAttrID = enum(u32)  //=> enum gpio_v2_line_attr_id {getLineInfo, watchLineInfo, lineRequest, setLineConfig}
-{
-    invalid       = 0,
-    flags         = 1,
-    output_values = 2,
-    debounce      = 3,
-};
-
-// =============================================================================
-//  Public Structures
-// =============================================================================
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-
-pub const Flags = packed struct (u64) //=> struct gpio_v2_line_flag {getLineInfo, watchLineInfo}
-{
-    used                  : bool,
-    active_low            : bool,
-    input                 : bool,
-    output                : bool,
-    edge_rising           : bool,
-    edge_falling          : bool,
-    open_drain            : bool,
-    open_source           : bool,
-    bias_pull_up          : bool,
-    bias_pull_down        : bool,
-    bias_disabled         : bool,
-    event_clock_realtime  : bool,
-    event_clock_hte	      : bool,
-    pad                   : u51,
-};
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-/// The line info structure contains basic data about each line of a chip.
-
-pub const LineInfo = extern struct //=> struct gpio_v2_line_info {getLineInfo, watchLineInfo}
-{
-    name      : [MAX_NAME_SIZE:0]u8,
-    consumer  : [MAX_NAME_SIZE:0]u8,
-    offset    : u32,
-    num_attrs : u32,
-    flags     : Flags align(8),
-    attrs     : [MAX_LINE_ATTRS]LineAttribute,
-    padding   : [4]u32,
-};
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-
-pub const LineRequest = extern struct //=> struct gpio_v2_line_request {lineRequest, setLineConfig}
-{
-    lines             : [MAX_LINES]u32,
-    consumer          : [MAX_NAME_SIZE:0]u8,
-    config            : LineConfig,
-    num_lines         : u32,
-    event_buffer_size : u32,
-    padding           : [5]u32,
-    fd                : std.posix.fd_t,
-
-    // -------------------------------------------------------------------------
-
-    pub fn fillLines( self : *LineRequest, in_mask : u64 ) void
-    {
-        self.num_lines = 0;
-
-        var mask = in_mask;
-
-        for(0..MAX_LINES) |line|
-        {
-            if (mask == 0) return;
-
-            if ((mask & 1) != 0)
-            {
-                self.lines[self.num_lines] = @intCast( line );
-                self.num_lines += 1;
-            }
-
-            mask >>= 1;
-        }
-    }
-};
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-
-pub const LineConfig = extern struct  //=> struct gpio_v2_line_config {lineRequest, setLineConfig}
-{
-    flags     : u64 align(8),
-    num_attrs : u32,
-    padding   : [5]u32,
-    attrs     : [MAX_LINE_ATTRS]LineConfigAttribute,
-};
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-
-pub const LineConfigAttribute = extern struct //=> struct gpio_v2_line_config_attribute {lineRequest, setLineConfig}
-{
-    attr : LineAttribute,
-    mask : u64 align(8),
-};
-
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-/// The line attribute structure discribes attirbutes that a chip's line
-/// might have.
-
-pub const LineAttribute = extern struct //=> struct gpio_v2_line_attribute {getLineInfo, watchLineInfo, lineRequest, setLineConfig}
-{
-    id   : LineAttrID,
-    data : extern union
-    {
-        flags           : u64,
-        value           : u64,
-        debounce_period : u32,
-    } align( 8 ),
-};
+pub const LineSet = std.StaticBitSet( Ioctl.MAX_LINES );
+pub const LineNum = std.math.IntFittingRange( 0, Ioctl.MAX_LINES - 1 );
 
 // =============================================================================
 //  Public Functions
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-//  Public Function init
+//  Public Function Chip.init
 // -----------------------------------------------------------------------------
 /// Initialize the chip structure.
 ///
@@ -235,7 +91,7 @@ pub fn init( self         : *Chip,
 
     self.path = try self.allocator.dupe( u8, in_path );
 
-     _ = try ioctl( self.fd, .get_info, &self.info );
+     _ = try Ioctl.ioctl( self.fd, .get_info, &self.info );
 
     log.debug( "get info -- line_count = {}", .{ self.info.line_count } );
 
@@ -244,9 +100,9 @@ pub fn init( self         : *Chip,
 
     for (self.line_names, 0..) |*a_name, i|
     {
-        var line_info = std.mem.zeroes( LineInfo );
-        line_info.offset = @intCast( i );
-        _ = try ioctl( self.fd, .line_info, &line_info );
+        var line_info = std.mem.zeroes( Ioctl.LineInfo );
+        line_info.line = @intCast( i );
+        _ = try Ioctl.ioctl( self.fd, .line_info, &line_info );
 
         const len = std.mem.indexOfSentinel( u8, 0, &line_info.name );
 
@@ -255,7 +111,7 @@ pub fn init( self         : *Chip,
 }
 
 // -----------------------------------------------------------------------------
-//  Public Function deinit
+//  Public Function Chip.deinit
 // -----------------------------------------------------------------------------
 /// Close the chip's file and clean up the Chip structure.
 
@@ -276,26 +132,28 @@ pub fn deinit( self : *Chip ) void
 }
 
 // -----------------------------------------------------------------------------
-//  Public Function request
+//  Public Function Chip.request
 // -----------------------------------------------------------------------------
 /// Create a Request structure for this chip that will request the provided
-/// lines.
+/// lines.  This function may be called before the Chip's init function
+/// is called.
 
-pub fn request( self : *Chip, in_lines : [] const u6 ) Request
+pub fn request( self : *Chip, in_lines : [] const LineNum ) Request
 {
-    var lines : u64 = 0;
+    var req = Request{ .chip  = self,
+                       .lines = std.mem.zeroes( LineSet ) };
 
-    for (in_lines) |a_line| lines |= @as( u64, 1 ) << a_line;
+    for (in_lines) |a_line| req.lines.set( a_line );
 
-    return .{ .chip = self, .lines = lines };
+    return req;
 }
 
 // -----------------------------------------------------------------------------
-//  Public Function lineFromName
+//  Public Function Chip.lineFromName
 // -----------------------------------------------------------------------------
 /// Given a name, return the line number with that name, or  error.NotFound.
 
-pub fn lineFromName( self : Chip, in_name : [] const u8 ) !u6
+pub fn lineFromName( self : Chip, in_name : [] const u8 ) !LineNum
 {
     for (self.line_names, 0..) |a_name, i|
     {
@@ -306,66 +164,15 @@ pub fn lineFromName( self : Chip, in_name : [] const u8 ) !u6
 }
 
 // -----------------------------------------------------------------------------
-//  Function ioctl
+//  Public Function Chip.getLineInfo
 // -----------------------------------------------------------------------------
+/// Get the LineInfo for a given line.
 
-pub fn ioctl( in_fd    : std.os.linux.fd_t,
-              in_ioctl : Ioctl,
-              in_data  : *anyopaque ) !usize
+pub fn getLineInfo( self     : Chip,
+                    in_line  : LineNum,
+                    out_info : *Ioctl.Line_Info ) !void
 {
-    const status = std.os.linux.ioctl( in_fd,
-                                       @intFromEnum( in_ioctl ),
-                                       @intFromPtr( in_data ) );
-
-    if (status >= 0) return @intCast( status );
-
-    log.err( "ioctl result: {}", .{ std.posix.errno( status ) } );
-
-    switch (std.posix.errno( status ))
-    {
-        .SUCCESS => return,
-        .BADF => unreachable,
-        .FAULT => unreachable,
-        .INVAL => unreachable,
-        .ENOTTY => unreachable,
-        else => |err| return std.posix.unexpectedErrno( err ),
-    }
-}
-
-// =============================================================================
-//  Testing
-// =============================================================================
-
-const testing   = std.testing;
-
-const chip_path =  "/dev/gpiochip0";
-
-// -----------------------------------------------------------------------------
-
-test "Chip"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    try testing.expect( chip.fd != 0xFFFF_FFFF );
-
-    log.warn( "", .{} );
-    log.warn( "chip info.name:       {s}", .{ chip.info.name } );
-    log.warn( "chip info.label:      {s}", .{ chip.info.label } );
-    log.warn( "chip info.line_count: {}",  .{ chip.info.line_count } );
-    log.warn( "", .{} );
-}
-
-// -----------------------------------------------------------------------------
-
-test "line from name"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    try testing.expectEqual( 22, chip.lineFromName( "GPIO22" ) );
+    out_info.* = std.mem.zeroes( Ioctl.LineInfo );
+    out_info.line = @intCast( in_line );
+    _ = try Ioctl.ioctl( self.fd, .line_info, out_info );
 }
