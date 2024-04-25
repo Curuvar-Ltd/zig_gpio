@@ -9,8 +9,8 @@
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer.
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
 //
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
@@ -22,14 +22,15 @@
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 
 /// Access the Linux GPIO Chip interface
 
@@ -37,7 +38,7 @@ const std = @import( "std" );
 
 const Chip    = @This();
 const Request = @import( "chip-request.zig" );
-const Ioctl   = @import( "ioctl.zig" );
+const GPIO    = @import( "gpio.zig" );
 
 const log     = std.log.scoped( .chip );
 const assert  = std.debug.assert;
@@ -49,15 +50,15 @@ const assert  = std.debug.assert;
 allocator  : std.mem.Allocator   = undefined,
 path       : ?[] const u8        = null,
 fd         : std.posix.fd_t      = undefined,
-info       : Ioctl.ChipInfo      = undefined,
+info       : GPIO.ChipInfo       = undefined,
 line_names : [][] const u8       = undefined,
 
 // =============================================================================
 //  Public Constants
 // =============================================================================
 
-pub const LineSet = std.StaticBitSet( Ioctl.MAX_LINES );
-pub const LineNum = std.math.IntFittingRange( 0, Ioctl.MAX_LINES - 1 );
+pub const LineSet = std.StaticBitSet( GPIO.MAX_LINES );
+pub const LineNum = std.math.IntFittingRange( 0, GPIO.MAX_LINES - 1 );
 
 // =============================================================================
 //  Public Functions
@@ -91,18 +92,20 @@ pub fn init( self         : *Chip,
 
     self.path = try self.allocator.dupe( u8, in_path );
 
-     _ = try Ioctl.ioctl( self.fd, .get_info, &self.info );
+     _ = try GPIO.ioctl( self.fd, .get_info, &self.info );
 
     log.debug( "get info -- line_count = {}", .{ self.info.line_count } );
 
-     self.line_names = try self.allocator.alloc( [] const u8, self.info.line_count );
+     self.line_names = try self.allocator.alloc( [] const u8,
+                                                 self.info.line_count );
+
      errdefer self.allocator.free( self.line_names );
 
     for (self.line_names, 0..) |*a_name, i|
     {
-        var line_info = std.mem.zeroes( Ioctl.LineInfo );
+        var line_info = std.mem.zeroes( GPIO.LineInfo );
         line_info.line = @intCast( i );
-        _ = try Ioctl.ioctl( self.fd, .line_info, &line_info );
+        _ = try GPIO.ioctl( self.fd, .line_info, &line_info );
 
         const len = std.mem.indexOfSentinel( u8, 0, &line_info.name );
 
@@ -135,8 +138,11 @@ pub fn deinit( self : *Chip ) void
 //  Public Function Chip.request
 // -----------------------------------------------------------------------------
 /// Create a Request structure for this chip that will request the provided
-/// lines.  This function may be called before the Chip's init function
-/// is called.
+/// lines.
+///
+/// This function may be called before the Chip's init function is called.
+///
+/// The Request's init function must be called before using the request.
 
 pub fn request( self : *Chip, in_lines : [] const LineNum ) Request
 {
@@ -166,13 +172,69 @@ pub fn lineFromName( self : Chip, in_name : [] const u8 ) !LineNum
 // -----------------------------------------------------------------------------
 //  Public Function Chip.getLineInfo
 // -----------------------------------------------------------------------------
-/// Get the LineInfo for a given line.
+/// Fill in LineInfo structure for a given line.
+///
+/// This function allows raw access to the .line_info ioctl.
 
 pub fn getLineInfo( self     : Chip,
                     in_line  : LineNum,
-                    out_info : *Ioctl.Line_Info ) !void
+                    out_info : *GPIO.LineInfo ) !void
 {
-    out_info.* = std.mem.zeroes( Ioctl.LineInfo );
+    out_info.* = std.mem.zeroes( GPIO.LineInfo );
     out_info.line = @intCast( in_line );
-    _ = try Ioctl.ioctl( self.fd, .line_info, out_info );
+    _ = try GPIO.ioctl( self.fd, .line_info, out_info );
 }
+
+// -----------------------------------------------------------------------------
+//  Public Function Chip.watchLine
+// -----------------------------------------------------------------------------
+/// Start watching a given line.
+///
+/// This function allows raw access to the .watch_line ioctl.
+
+pub fn watchLine( self     : Chip,
+                  in_line  : LineNum,
+                  out_info : *GPIO.LineInfo ) !void
+{
+    out_info.* = std.mem.zeroes( GPIO.LineInfo );
+    out_info.line = @intCast( in_line );
+    _ = try GPIO.ioctl( self.fd, .watch_line, out_info );
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function Chip.unwatchLine
+// -----------------------------------------------------------------------------
+/// Stop watching a given line.
+///
+/// This function allows raw access to the .line_info ioctl.
+
+pub fn unwatchLine( self     : Chip,
+                    in_line  : LineNum ) !void
+{
+    var line : u32 = @intCast( in_line );
+
+    _ = try GPIO.ioctl( self.fd, .unwatch_line, &line );
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function Chip.getInfoEvent
+// -----------------------------------------------------------------------------
+
+pub fn getInfoEvent( self      : Chip,
+                     out_event : *GPIO.InfoEvent ) !void
+{
+    out_event.* = std.mem.zeroes( GPIO.InfoEvent );
+
+    try GPIO.readEvent( self.fd, out_event );
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function Chip.waitForInfoEvent
+// -----------------------------------------------------------------------------
+
+pub fn waitForInfoEvent( self       : Chip,
+                         in_timeout : ?u64 ) !bool
+{
+    return try GPIO.pollInfoEvent( self.fd, in_timeout );
+}
+

@@ -9,8 +9,8 @@
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer.
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
 //
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
@@ -22,20 +22,22 @@
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 
-/// Access the Linux GPIO Chip interface
+/// This file contains the constant and type definitions needed to access the
+/// Linux /dev/gpiochipN interface.
 
 const std = @import( "std" );
 
-const log    = std.log.scoped( .ioctl );
+const log = std.log.scoped( .gpiochip );
 
 // =============================================================================
 //  Public Constants
@@ -45,9 +47,9 @@ pub const Ioctl = enum(u32)
 {
     get_info            = 0x8044B401,  // Data: &ChipInfo
     line_info           = 0xC100B405,  // Data: &LineInfo
-    watch_line_info     = 0xC100B406,  // Data: &LineInfo
+    watch_line          = 0xC100B406,  // Data: &LineInfo
     line_request        = 0xC250B407,  // Data: &LineRequest
-    unwatch_line_info   = 0xC004B40C,  // Data: (usize) line number
+    unwatch_line        = 0xC004B40C,  // Data: (usize) line number
     set_line_config     = 0xC110B40D,  // Data: &LineRequest
     get_line_values     = 0xC010B40E,  // Data: &LineValues
     set_line_values     = 0xC010B40F,  // Data: &LineValues
@@ -60,6 +62,7 @@ pub const MAX_LINE_ATTRS     = 10;
 // =============================================================================
 //  Public Structures
 // =============================================================================
+
 // -----------------------------------------------------------------------------
 /// This structure defines the data format for the .get_info ioctl call.
 
@@ -96,6 +99,18 @@ pub const LineInfo = extern struct //=> struct gpio_v2_line_info
     padding   : [4]u32,
 };
 
+
+// -----------------------------------------------------------------------------
+/// This stucture defines an info event which is read from the Chip's file
+/// descriptor.  Info events are provided after makeing a WatchLine call.
+
+pub const InfoEvent = extern struct
+{
+    event_type : InfoEventType,
+    timestamp  : u64,
+    info       : LineInfo,
+};
+
 // -----------------------------------------------------------------------------
 /// This structure defines the data format for the .line_request and
 /// .set_line_config ioctls.
@@ -117,7 +132,6 @@ pub const LineRequest = extern struct //=> struct gpio_v2_line_request
     padding           : [5]u32,
     /// Will be set to the file descriptor associated with the request.
     fd                : std.posix.fd_t,
-
 
     // -------------------------------------------------------------------------
     //  Sub-structures
@@ -188,7 +202,7 @@ pub const LineAttribute = extern struct //=> struct gpio_v2_line_attribute
     data : extern union
     {
         flags    : Flags, // if .id is .flags
-        value    : u64,   // if .id is .value
+        values   : u64,   // if .id is .value
         debounce : u32,   // if .id is .debounce
     } align( 8 ),
 
@@ -233,6 +247,15 @@ pub const Flags = packed struct (u64) //=> struct gpio_v2_line_flag {getLineInfo
 };
 
 // -----------------------------------------------------------------------------
+
+pub const InfoEventType = enum(u32)  //=> enum gpiod_info_event_type {getLineInfoEvent}
+{
+    requested    = 1,
+    released     = 2,
+    reconfigured = 3,
+};
+
+// -----------------------------------------------------------------------------
 //  Function ioctl
 // -----------------------------------------------------------------------------
 
@@ -256,6 +279,98 @@ pub fn ioctl( in_fd    : std.os.linux.fd_t,
         .BUSY    => return error.LineBusy,
         .PERM    => return error.PermissionDenied,
         .INVAL   => return error.InvalidRequest,
+        .BADF    => unreachable,
+        .FAULT   => unreachable,
+        .NOTTY   => unreachable,
+        else => |err| return std.posix.unexpectedErrno( err ),
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Function readEvent
+// -----------------------------------------------------------------------------
+/// Call to read an event from a Chip.
+///
+/// Caller must have made a watch_line ioctl to tell kernel to generate events.
+/// If no event is available this call will block until one becomes available.
+/// If you want to test to see if an event is available, use the pollInfoEvent
+/// call.
+///
+/// Parameters:
+/// - in_fd      the file descriptor of an open Chip stream
+/// - in_timeout timeout in nS.  Pass null for now no timeout.
+
+pub fn readEvent( in_fd     : std.os.linux.fd_t,
+                  out_event : *InfoEvent ) !void
+{
+    const status : isize = @bitCast( std.os.linux.read(
+                                        in_fd,
+                                        @ptrCast( out_event ),
+                                        @sizeOf( InfoEvent ) ) );
+
+    log.warn( "status: {}", .{ status } );
+
+    if (status == @sizeOf( InfoEvent )) return;
+
+    log.err( "result: {}", .{ std.posix.errno( status ) } );
+
+    if (status >= 0) return error.BadRead; // ## TODO ## check this code?
+
+    switch (std.posix.errno( status ))
+    {
+        .BUSY    => unreachable,
+        .PERM    => unreachable,
+        .INVAL   => unreachable,
+        .BADF    => unreachable,
+        .FAULT   => unreachable,
+        .NOTTY   => unreachable,
+        else => |err| return std.posix.unexpectedErrno( err ),
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Function pollInfoEvent
+// -----------------------------------------------------------------------------
+/// Call this to determine if an info event is avaiable to read.
+///
+/// Parameters:
+/// - in_fd      the file descriptor of an open Chip stream
+/// - in_timeout timeout in nS.  Pass null for now no timeout.
+
+pub fn pollInfoEvent( in_fd      : std.os.linux.fd_t,
+                      in_timeout : ?u64 ) !bool
+{
+    var timeout : std.os.linux.timespec = undefined;
+
+	if (in_timeout) |t|
+    {
+		timeout.tv_sec  = @intCast( t / 1_000_000_000 );
+		timeout.tv_nsec = @intCast( t % 1_000_000_000 );
+	}
+
+    var pollfd : std.os.linux.pollfd = .{ .fd      = in_fd,
+                                          .events  =   std.os.linux.POLL.IN
+                                                     | std.os.linux.POLL.PRI,
+                                          .revents = 0 };
+
+    const status : isize = @bitCast( std.os.linux.ppoll(
+                                        @ptrCast( &pollfd ),
+                                        1,
+                                        if (in_timeout != null) &timeout else null,
+                                        null ) );
+
+    log.warn( "status: {any}", .{ status } );
+
+    if (status == 1) return true;
+    if (status == 0) return false;
+
+    log.err( "result: {}", .{ std.posix.errno( status ) } );
+
+    switch (std.posix.errno( status ))
+    {
+        .BUSY    => unreachable,
+        .PERM    => unreachable,
+        .INVAL   => unreachable,
         .BADF    => unreachable,
         .FAULT   => unreachable,
         .NOTTY   => unreachable,

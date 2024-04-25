@@ -9,8 +9,8 @@
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer.
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
 //
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
@@ -22,14 +22,15 @@
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 
 /// This structure is used to request control of lines from the kernel.
 /// A line must be successfully requested before it value can be returned.
@@ -52,7 +53,7 @@ const std     = @import( "std" );
 const Request = @This();
 const Chip    = @import( "chip.zig" );
 const Line    = @import( "chip-request-line.zig" );
-const Ioctl   = @import( "ioctl.zig" );
+const GPIO    = @import( "gpio.zig" );
 
 const log    = std.log.scoped( .chip_request );
 const assert = std.debug.assert;
@@ -68,19 +69,7 @@ lines     : Chip.LineSet,
 //  Private Constants
 // =============================================================================
 
-const MAX_NAME_SIZE      = 31;
-const MAX_LINE_ATTRS     = 10;
-const MAX_LINES          = 64;
 const NS_PER_SEC         = 1_000_000_000;
-
-// =============================================================================
-//  Public Structures
-// =============================================================================
-
-// =============================================================================
-//  Private Structures
-// =============================================================================
-
 
 // =============================================================================
 //  Public Functions
@@ -96,18 +85,86 @@ const NS_PER_SEC         = 1_000_000_000;
 ///
 /// Note: The Request's Chip MUST be initialized before calling this function.
 
-pub fn init( self : *Request, in_consumer : [] const u8 ) !void
+pub fn init( self        : *Request,
+             in_consumer : [] const u8 ) !void
 {
-    assert( in_consumer.len <= MAX_NAME_SIZE );
+    assert( in_consumer.len <= GPIO.MAX_NAME_SIZE );
 
     self.deinit();
 
-    var req = std.mem.zeroes( Ioctl.LineRequest );
+    // Create a zero filled LineRequest structure
+
+    var req = std.mem.zeroes( GPIO.LineRequest );
+
+    // Fill in the line array and num_lines based on the Request's
+    // lines set.
+
     try req.fillLines( self.lines );
+
+    // Fill in the consumer field.
 
     std.mem.copyForwards( u8, &req.consumer, in_consumer );
 
-    _ = try Ioctl.ioctl( self.chip.fd, .line_request, &req );
+    // ### TODO ### Set event_buffer_size ##########################
+
+    // req.event_buffer_size = ????;
+
+    // ### TODO ### Set initial output pin values ##########################
+
+    // if (the-req-has-output-pins)
+    // {
+    //     const next_attr = &req.config.attrs[req.config.num_attrs];
+    //     req.config.num_attrs += 1;
+
+    //     next_attr.attr.id = .value;
+    //     next_attr.attr.data.values = value_bits; // u64
+    //     next_attr.mask             = value_mask; // u64
+    // }
+
+    // ### TODO ### Set pin debounce intervals #####################
+
+    // for (each-something) |dbp|
+    // {
+    //     const period      = get-debounce;
+    //     const mask : u64  = 0;
+    //
+    //     for (each-pin) |pin| mask |= @as( u64, 1 ) << pin;
+
+    //     if (req.config.num_attrs >= MAX_LINE_ATTRS) return error.ToManyAttrs;
+
+    //     const next_attr = &req.config.attrs[req.config.num_attrs];
+    //     req.config.num_attrs += 1;
+
+    //     next_attr.attr.id = .debounce;
+    //     next_attr.attr.data.debounce = period; // u64
+    //     next_attr.mask               = mask;      // u64
+    // }
+
+    // #### TODO ### Set flags ###########################
+    //       set pins to .input or .output
+    //       set pins to bias values
+    //       set pins trigger edge
+
+	// ret = set_flags(config, &uapi_cfg->config, &attr_idx);
+
+    // ----- test test test --------
+
+        var flags = std.mem.zeroes( GPIO.Flags );
+
+        flags.output = true;
+
+        const next_attr = &req.config.attrs[req.config.num_attrs];
+        req.config.num_attrs += 1;
+
+        next_attr.attr.id = .flags;
+        next_attr.attr.data.flags = flags;   // u64
+        next_attr.mask            = 0b0010;  // u64
+
+    // ----- test test test --------
+
+    // -- C version does get_info ioctl here to get chip name. --
+
+    _ = try GPIO.ioctl( self.chip.fd, .line_request, &req );
 
     log.warn( "Request Lines: {any}", .{ req.lines[0..req.num_lines] } );
 
@@ -154,9 +211,9 @@ pub fn getLineValuesMasked( self    : Request,
 {
     if (self.fd) |fd|
     {
-        var lv : Ioctl.LineValues = .{ .bits = 0, .mask = in_mask };
+        var lv : GPIO.LineValues = .{ .bits = 0, .mask = in_mask };
 
-        _ = try Ioctl.ioctl( fd, .get_line_values, &lv );
+        _ = try GPIO.ioctl( fd, .get_line_values, &lv );
 
         return lv.bits;
     }
@@ -181,10 +238,10 @@ pub fn getLineValues( self : Request ) ![]?bool
 {
     if (self.fd) |fd|
     {
-        var lv : Ioctl.LineValues = .{ .bits = 0,
+        var lv : GPIO.LineValues = .{ .bits = 0,
                                        .mask = 0xFFFF_FFFF_FFFF_FFFF };
 
-        _ = try Ioctl.ioctl( fd, .get_line_values, &lv );
+        _ = try GPIO.ioctl( fd, .get_line_values, &lv );
 
         var retval = try self.chip.allocator.alloc( ?bool,
                                                     self.chip.info.line_count );
@@ -231,10 +288,10 @@ pub fn getLineValue( self : Request, in_line : Chip.LineNum ) !bool
 
     if (self.fd) |fd|
     {
-        var lv : Ioctl.LineValues = .{ .bits = 0,
+        var lv : GPIO.LineValues = .{ .bits = 0,
                                        .mask = 0xFFFF_FFFF_FFFF_FFFF };
 
-        _ = try Ioctl.ioctl( fd, .get_line_values, &lv );
+        _ = try GPIO.ioctl( fd, .get_line_values, &lv );
 
         var line_index : Chip.LineNum = 0;
         var bit_mask   : u64          = 1;
@@ -271,9 +328,9 @@ pub fn setLineValuesMasked( self      : Request,
 {
     if (self.fd) |fd|
     {
-        var lv : Ioctl.LineValues = .{ .bits = in_values, .mask = in_mask };
+        var lv : GPIO.LineValues = .{ .bits = in_values, .mask = in_mask };
 
-        _ = try Ioctl.ioctl( fd, .set_line_values, &lv );
+        _ = try GPIO.ioctl( fd, .set_line_values, &lv );
 
         return;
     }
@@ -341,10 +398,10 @@ pub fn setLineValue( self     : Request,
             {
                 if (i == in_line)
                 {
-                    var lv : Ioctl.LineValues = .{ .bits = if (in_value) bit_mask else 0,
+                    var lv : GPIO.LineValues = .{ .bits = if (in_value) bit_mask else 0,
                                                    .mask = bit_mask };
 
-                    _ = try Ioctl.ioctl( fd, .set_line_values, &lv );
+                    _ = try GPIO.ioctl( fd, .set_line_values, &lv );
 
                     return;
                 }
@@ -372,11 +429,11 @@ pub fn setLineValue( self     : Request,
 //                     in_lines       : [] const Chip.LineNum,
 //                     in_values      : [] const LineValue,
 //                     in_consumer    : ?[] const u8,
-//                     in_buffer_size : u32 ) !Ioctl.LineInfo
+//                     in_buffer_size : u32 ) !GPIO.LineInfo
 // {
-//     assert( in_lines.len <= MAX_NAME_SIZE );
+//     assert( in_lines.len <= GPIO.MAX_NAME_SIZE );
 
-//     var req = std.mem.zeroes( Ioctl.LineInfo );
+//     var req = std.mem.zeroes( GPIO.LineInfo );
 
 //     for (in_lines, 0..) |a_line, i| req.lines[i] = a_line;
 
@@ -385,7 +442,7 @@ pub fn setLineValue( self     : Request,
 
 //     if (in_consumer) |consumer|
 //     {
-//         assert( consumer.len <= MAX_NAME_SIZE );
+//         assert( consumer.len <= GPIO.MAX_NAME_SIZE );
 
 //         std.mem.copyForwards( u8,
 //                               req.consumer[0..consumer.len],
@@ -463,7 +520,7 @@ pub fn setLineValue( self     : Request,
 // }
 
 
-//     var lr = std.mem.zeros( Ioctl.LineInfo );
+//     var lr = std.mem.zeros( GPIO.LineInfo );
 
 //     if (in_consumer) |c| std.mem.copy( u8, lr.consumer, c ); // ??? Direction
 
@@ -471,7 +528,7 @@ pub fn setLineValue( self     : Request,
 
 // pub fn setLineConfig( self : Chip, in_request : *LineRequestX, in_config : *LineConfigX )
 // {
-//     var lr = std.mem.zeros( Ioctl.LineInfo );
+//     var lr = std.mem.zeros( GPIO.LineInfo );
 
 //     lr.num_lines = in_config.num_configs;
 
@@ -629,7 +686,7 @@ pub fn setLineValue( self     : Request,
 //     {
 //         var lv = LineValues{ .bits = 0, .mask = @as( u64, 1 ) << self.line };
 
-//         _ = try Ioctl.ioctl( .get_line_values, &lv );
+//         _ = try GPIO.ioctl( .get_line_values, &lv );
 
 //         return (lv.bits & lv.mask) != 0;
 //     }
@@ -646,7 +703,7 @@ pub fn setLineValue( self     : Request,
 
 //         if (in_value) lv.bits = lv.mask;
 
-//         _ = try Ioctl.ioctl( .set_line_values, &lv );
+//         _ = try GPIO.ioctl( .set_line_values, &lv );
 //     }
 
 //     // -------------------------------------------------------------------------
@@ -655,10 +712,10 @@ pub fn setLineValue( self     : Request,
 
 //     pub fn watch( self : Line ) !void
 //     {
-//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
+//         var line_info = std.mem.zeroes( GPIO.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try Ioctl.ioctl( .watch_line_info, &line_info );
+//         _ = try GPIO.ioctl( .watch_line_info, &line_info );
 //     }
 
 //     // -------------------------------------------------------------------------
@@ -667,22 +724,22 @@ pub fn setLineValue( self     : Request,
 
 //     pub fn unwatch( self : Line ) !void
 //     {
-//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
+//         var line_info = std.mem.zeroes( GPIO.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try Ioctl.ioctl( .unwatch_line_info, &line_info );
+//         _ = try GPIO.ioctl( .unwatch_line_info, &line_info );
 //     }
 
 //     // -------------------------------------------------------------------------
 //     //  Public Function getLineInfo
 //     // -------------------------------------------------------------------------
 
-//     pub fn getLineInfo( self : Line, out_line_info : *Ioctl.LineInfo ) !void
+//     pub fn getLineInfo( self : Line, out_line_info : *GPIO.LineInfo ) !void
 //     {
-//         out_line_info.* = std.mem.zeroes( Ioctl.LineInfo );
+//         out_line_info.* = std.mem.zeroes( GPIO.LineInfo );
 //         out_line_info.offset = self.line;
 
-//         _ = try Ioctl.ioctl( .line_info, out_line_info );
+//         _ = try GPIO.ioctl( .line_info, out_line_info );
 //     }
 
 //     // -------------------------------------------------------------------------
@@ -691,10 +748,10 @@ pub fn setLineValue( self     : Request,
 
 //     pub fn direction( self : Line ) !Direction
 //     {
-//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
+//         var line_info = std.mem.zeroes( GPIO.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try Ioctl.ioctl( .line_info, &line_info );
+//         _ = try GPIO.ioctl( .line_info, &line_info );
 
 //         if (line_info.flags.input)
 //         {
@@ -713,10 +770,10 @@ pub fn setLineValue( self     : Request,
 
 //     pub fn bias( self : Line ) !Bias
 //     {
-//         var line_info = std.mem.zeroes( Ioctl.LineInfo );
+//         var line_info = std.mem.zeroes( GPIO.LineInfo );
 //         line_info.offset = self.line;
 
-//         _ = try Ioctl.ioctl( .line_info, &line_info );
+//         _ = try GPIO.ioctl( .line_info, &line_info );
 
 //         if (line_info.flags.bias_pull_up)
 //         {
@@ -762,10 +819,10 @@ pub fn setLineValue( self     : Request,
 // // -----------------------------------------------------------------------------
 // /// The line info structure contains basic data about each line of a chip.
 
-// pub const Ioctl.LineInfo = extern struct //=> struct gpio_v2_line_info {getLineInfo, watchLineInfo}
+// pub const GPIO.LineInfo = extern struct //=> struct gpio_v2_line_info {getLineInfo, watchLineInfo}
 // {
-//     name      : [MAX_NAME_SIZE:0]u8,
-//     consumer  : [MAX_NAME_SIZE:0]u8,
+//     name      : [GPIO.MAX_NAME_SIZE:0]u8,
+//     consumer  : [GPIO.MAX_NAME_SIZE:0]u8,
 //     offset    : u32,
 //     num_attrs : u32,
 //     flags     : Flags align(8),
@@ -780,7 +837,7 @@ pub fn setLineValue( self     : Request,
 
 // pub const LineInfoEvent = extern struct    //=> struct gpio_v2_line_info_changed {getLineInfoEvent}
 // {
-//     info       : Ioctl.LineInfo,
+//     info       : GPIO.LineInfo,
 //     timestamp  : u64 align(8),
 //     event_type : InfoEventType,
 //     pad        : [5]u32,
@@ -825,10 +882,10 @@ pub fn setLineValue( self     : Request,
 // // -----------------------------------------------------------------------------
 // // -----------------------------------------------------------------------------
 
-// pub const Ioctl.LineInfo = extern struct //=> struct gpio_v2_line_request {lineRequest, setLineConfig}
+// pub const GPIO.LineInfo = extern struct //=> struct gpio_v2_line_request {lineRequest, setLineConfig}
 // {
 //     lines             : [MAX_LINES]u32,
-//     consumer          : [MAX_NAME_SIZE:0]u8,
+//     consumer          : [GPIO.MAX_NAME_SIZE:0]u8,
 //     config            : LineConfig,
 //     num_lines         : u32,
 //     event_buffer_size : u32,
@@ -939,7 +996,7 @@ pub fn setLineValue( self     : Request,
 
 // pub const RequestConfig = extern struct //=> struct gpiod_request_config
 // {
-//     consumer          : [MAX_NAME_SIZE:0]u8,
+//     consumer          : [GPIO.MAX_NAME_SIZE:0]u8,
 //     event_buffer_size : usize,
 // };
 
@@ -960,9 +1017,9 @@ pub fn setLineValue( self     : Request,
 // pub const LineInfoX = extern struct //=> struct gpiod_line_info
 // {
 //     offset          : u32,
-//     name            : [MAX_NAME_SIZE:0]u8,
+//     name            : [GPIO.MAX_NAME_SIZE:0]u8,
 //     used            : bool,
-//     consumer        : [MAX_NAME_SIZE:0]u8,
+//     consumer        : [GPIO.MAX_NAME_SIZE:0]u8,
 //     direction       : LineDirection,
 //     active_low      : bool,
 //     bias            : LineBias,
@@ -980,13 +1037,13 @@ pub fn setLineValue( self     : Request,
 // ///
 // /// Params:
 // /// - in_line  - the offset to the line to watch
-// /// - out_info - the Ioctl.LineInfo struct to fill in (must remain valid until unwatch)
+// /// - out_info - the GPIO.LineInfo struct to fill in (must remain valid until unwatch)
 
 // pub fn watchLineInfo( self     : Chip,
 //                       in_line  : u32,
-//                       out_info : *Ioctl.LineInfo ) !void
+//                       out_info : *GPIO.LineInfo ) !void
 // {
-//     out_info.* = std.mem.zeroes( Ioctl.LineInfo );
+//     out_info.* = std.mem.zeroes( GPIO.LineInfo );
 //     out_info.offset = in_line;
 //     _ = try ioctl( self.fd, .watch_line_info, out_info );
 // }

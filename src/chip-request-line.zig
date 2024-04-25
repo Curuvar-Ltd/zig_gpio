@@ -63,10 +63,43 @@ pub fn value( self : Line ) !bool
 {
     return self.request.getLineValue( self.line );
 }
+
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
 pub fn setValue( self : Line, in_value : bool ) !void
 {
     return self.request.setLineValue( self.line, in_value );
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn getDirection( self : Line ) !Direction
+{
+    _= self; return .input; // ### TODO ### implement getDirection
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setDirection( self : Line, in_value : bool ) !void
+{
+    _= self; _ = in_value; // ### TODO ### implement setDirection
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn getBias( self : Line ) !Bias
+{
+    _= self; return .input; // ### TODO ### implement getBias
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setBias( self : Line, in_value : Bias ) !void
+{
+    _= self; _ = in_value; // ### TODO ### implement setBias
 }
