@@ -52,11 +52,11 @@ const std     = @import( "std" );
 
 const Request = @This();
 const Chip    = @import( "chip.zig" );
-const Line    = @import( "chip-request-line.zig" );
-const GPIO    = @import( "gpio.zig" );
+const Line    = @import( "chip-line.zig" );
 
 const log    = std.log.scoped( .chip_request );
 const assert = std.debug.assert;
+
 
 /// The Chip contining the requested lines.
 chip      : * const Chip,
@@ -88,13 +88,13 @@ const NS_PER_SEC         = 1_000_000_000;
 pub fn init( self        : *Request,
              in_consumer : [] const u8 ) !void
 {
-    assert( in_consumer.len <= GPIO.MAX_NAME_SIZE );
+    assert( in_consumer.len <= Chip.MAX_NAME_SIZE );
 
     self.deinit();
 
     // Create a zero filled LineRequest structure
 
-    var req = std.mem.zeroes( GPIO.LineRequest );
+    var req = std.mem.zeroes( Chip.LineRequest );
 
     // Fill in the line array and num_lines based on the Request's
     // lines set.
@@ -149,7 +149,7 @@ pub fn init( self        : *Request,
 
     // ----- test test test --------
 
-        var flags = std.mem.zeroes( GPIO.Flags );
+        var flags = std.mem.zeroes( Chip.Flags );
 
         flags.output = true;
 
@@ -164,7 +164,7 @@ pub fn init( self        : *Request,
 
     // -- C version does get_info ioctl here to get chip name. --
 
-    _ = try GPIO.ioctl( self.chip.fd, .line_request, &req );
+    _ = try Chip.ioctl( self.chip.fd, .line_request, &req );
 
     log.warn( "Request Lines: {any}", .{ req.lines[0..req.num_lines] } );
 
@@ -194,7 +194,29 @@ pub fn deinit( self : *Request ) void
 
 pub inline fn line( self : *Request, in_line : Chip.LineNum ) Line
 {
-    return .{ .request = self, .line = in_line };
+    return .{ .chip     = self.chip,
+              .request  = self,
+              .line_num = in_line };
+}
+
+// -----------------------------------------------------------------------------
+//  Public Function Request.setLineConfig
+// -----------------------------------------------------------------------------
+/// Update the confguration of selected line.
+
+pub fn setLineConfig( self       : * const Request,
+                      in_request : *Chip.LineRequest ) !void
+{
+    if (self.fd) |fd|
+    {
+        // ### TODO ### Make sure line number are OK for the request
+
+        _ = try Chip.ioctl( fd, .set_line_config, in_request );
+
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -205,8 +227,8 @@ pub inline fn line( self : *Request, in_line : Chip.LineNum ) Line
 /// This function allows raw access to the .line_info ioctl.
 
 pub inline fn getLineInfo( self     : Request,
-                           in_line  : LineNum,
-                           out_info : *GPIO.LineInfo ) !void
+                           in_line  : Chip.LineNum,
+                           out_info : *Chip.LineInfo ) !void
 {
     try self.chip.getLineInfo( in_line, out_info );
 }
@@ -224,9 +246,9 @@ pub fn getLineValuesMasked( self    : Request,
 {
     if (self.fd) |fd|
     {
-        var lv : GPIO.LineValues = .{ .bits = 0, .mask = in_mask };
+        var lv : Chip.LineValues = .{ .bits = 0, .mask = in_mask };
 
-        _ = try GPIO.ioctl( fd, .get_line_values, &lv );
+        _ = try Chip.ioctl( fd, .get_line_values, &lv );
 
         return lv.bits;
     }
@@ -251,10 +273,10 @@ pub fn getLineValues( self : Request ) ![]?bool
 {
     if (self.fd) |fd|
     {
-        var lv : GPIO.LineValues = .{ .bits = 0,
+        var lv : Chip.LineValues = .{ .bits = 0,
                                        .mask = 0xFFFF_FFFF_FFFF_FFFF };
 
-        _ = try GPIO.ioctl( fd, .get_line_values, &lv );
+        _ = try Chip.ioctl( fd, .get_line_values, &lv );
 
         var retval = try self.chip.allocator.alloc( ?bool,
                                                     self.chip.info.line_count );
@@ -301,10 +323,10 @@ pub fn getLineValue( self : Request, in_line : Chip.LineNum ) !bool
 
     if (self.fd) |fd|
     {
-        var lv : GPIO.LineValues = .{ .bits = 0,
+        var lv : Chip.LineValues = .{ .bits = 0,
                                        .mask = 0xFFFF_FFFF_FFFF_FFFF };
 
-        _ = try GPIO.ioctl( fd, .get_line_values, &lv );
+        _ = try Chip.ioctl( fd, .get_line_values, &lv );
 
         var line_index : Chip.LineNum = 0;
         var bit_mask   : u64          = 1;
@@ -341,9 +363,9 @@ pub fn setLineValuesMasked( self      : Request,
 {
     if (self.fd) |fd|
     {
-        var lv : GPIO.LineValues = .{ .bits = in_values, .mask = in_mask };
+        var lv : Chip.LineValues = .{ .bits = in_values, .mask = in_mask };
 
-        _ = try GPIO.ioctl( fd, .set_line_values, &lv );
+        _ = try Chip.ioctl( fd, .set_line_values, &lv );
 
         return;
     }
@@ -411,10 +433,10 @@ pub fn setLineValue( self     : Request,
             {
                 if (i == in_line)
                 {
-                    var lv : GPIO.LineValues = .{ .bits = if (in_value) bit_mask else 0,
+                    var lv : Chip.LineValues = .{ .bits = if (in_value) bit_mask else 0,
                                                    .mask = bit_mask };
 
-                    _ = try GPIO.ioctl( fd, .set_line_values, &lv );
+                    _ = try Chip.ioctl( fd, .set_line_values, &lv );
 
                     return;
                 }
@@ -435,9 +457,9 @@ pub fn setLineValue( self     : Request,
 // -----------------------------------------------------------------------------
 
 pub inline fn getEdgeEvent( self      : Request,
-                            out_event : []GPIO.EdgeEvent ) !usize
+                            out_event : []Chip.EdgeEvent ) !usize
 {
-    return try GPIO.readEvent( GPIO.EdgeEvent, self.fd, out_event );
+    return try Chip.readEvent( Chip.EdgeEvent, self.fd, out_event );
 }
 
 // -----------------------------------------------------------------------------
@@ -447,6 +469,6 @@ pub inline fn getEdgeEvent( self      : Request,
 pub inline fn waitForEdgeEvent( self       : Request,
                                 in_timeout : ?u64 ) !usize
 {
-    return try GPIO.pollEvent( GPIO.EdgeEvent, self.fd, in_timeout );
+    return try Chip.pollEvent( Chip.EdgeEvent, self.fd, in_timeout );
 }
 

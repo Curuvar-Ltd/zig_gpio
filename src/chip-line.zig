@@ -31,7 +31,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-/// This structure is used to control a single line.
+/// This structure is used to control a single line_num.
 
 const std     = @import( "std" );
 
@@ -42,8 +42,9 @@ const Request = @import( "chip-request.zig" );
 const log    = std.log.scoped( .chip_request_line );
 const assert = std.debug.assert;
 
-request  : * const Request,
-line     : Chip.LineNum,
+chip     : * const Chip,
+request  : ?* const Request,
+line_num : Chip.LineNum,
 
 // =============================================================================
 //  Public Functions
@@ -54,7 +55,12 @@ line     : Chip.LineNum,
 
 pub fn value( self : Line ) !bool
 {
-    return self.request.getLineValue( self.line );
+    if (self.request) |req|
+    {
+        return try req.getLineValue( self.line_num );
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -62,45 +68,72 @@ pub fn value( self : Line ) !bool
 
 pub fn setValue( self : Line, in_value : bool ) !void
 {
-    return self.request.setLineValue( self.line, in_value );
+    if (self.request) |req|
+    {
+        try req.setLineValue( self.line_num, in_value );
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub inline fn getInfo( self : Line, out_info : *GPIO.LineInfo ) !void
+pub inline fn getInfo( self : Line, out_info : *Chip.LineInfo ) !void
 {
-    self.line.chip.getLineInfo( self.line, out_info );
+    try self.chip.getLineInfo( self.line_num, out_info );
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getDirection( self : Line ) !GPIO.Direction
+pub fn direction( self : Line ) !Chip.Direction
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 
     if (info.flags.output) return .output;
+    if (info.flags.input)  return .input;
 
-    return .input;
+    return error.InvalidDirection;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setDirection( self : Line, in_value : GPIO.Direction ) !void
+pub fn setDirection( self : Line, in_direction : Chip.Direction ) !void
 {
-    _= self; _ = in_value; // ### TODO ### implement setDirection
+    if (self.request) |req|
+    {
+        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+
+        lineConfig.lines[0]         = self.line_num;
+        lineConfig.num_lines        = 1;
+        lineConfig.config.num_attrs = 1;
+
+        const attr = &lineConfig.config.attrs[0];
+
+        attr.mask            = 0b1;
+        attr.attr.id         = .flags;
+        attr.attr.data.flags = .{ .input  = (in_direction == .input),
+                                  .output = (in_direction == .output) };
+
+        try req.setLineConfig( &lineConfig );
+
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getBias( self : Line ) !GPIO.Bias
+pub fn bias( self : Line ) !Chip.Bias
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -113,21 +146,47 @@ pub fn getBias( self : Line ) !GPIO.Bias
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setBias( self : Line, in_value : GPIO.Bias ) !void
+pub fn setBias( self : Line, in_bias : Chip.Bias ) !void
 {
-    _= self; _ = in_value; // ### TODO ### implement setBias
+    if (self.request) |req|
+    {
+        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+
+        lineConfig.lines[0]         = self.line_num;
+        lineConfig.num_lines        = 1;
+        lineConfig.config.num_attrs = 1;
+
+        const attr = &lineConfig.config.attrs[0];
+
+        attr.mask            = 0b1;
+        attr.attr.id         = .flags;
+        attr.attr.data.flags = .{ .bias_pull_up   = (in_bias == .pull_up),
+                                  .bias_pull_down = (in_bias == .pull_down),
+                                  .bias_disabled  = (in_bias == .none ) };
+
+        try req.setLineConfig( &lineConfig );
+
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getEdge( self : Line ) !GPIO.Edge
+pub fn edge( self : Line ) !Chip.Edge
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 
-    if (!info.flags.edge_rising)  return .falling;
+    if (!info.flags.edge_rising)
+    {
+        if (!info.flags.edge_falling) return .none;
+        return .falling;
+    }
+
     if (!info.flags.edge_falling) return .rising;
 
     return .both;
@@ -136,21 +195,48 @@ pub fn getEdge( self : Line ) !GPIO.Edge
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setEdge( self : Line, in_value : GPIO.Edge ) !void
+pub fn setEdge( self : Line, in_edge : Chip.Edge ) !void
 {
-    _= self; _ = in_value; // ### TODO ### implement setEdge
+    if (self.request) |req|
+    {
+        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+
+        lineConfig.lines[0]         = self.line_num;
+        lineConfig.num_lines        = 1;
+        lineConfig.config.num_attrs = 1;
+
+        const attr = &lineConfig.config.attrs[0];
+
+        attr.mask            = 0b1;
+        attr.attr.id         = .flags;
+        attr.attr.data.flags = .{ .edge_rising  = (   in_edge == .rising
+                                                   or in_edge == .both ),
+                                  .edge_falling = (   in_edge == .falling
+                                                   or in_edge == .both ) };
+
+        try req.setLineConfig( &lineConfig );
+
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getDrive( self : Line ) !GPIO.Drive
+pub fn drive( self : Line ) !Chip.Drive
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 
-    if (!info.flags.open_drain)  return .open_source;
+    if (!info.flags.open_drain)
+    {
+        if (!info.flags.open_source) return .none;
+        return .open_source;
+    }
+
     if (!info.flags.open_source) return .open_drain;
 
     return .push_pull;
@@ -159,17 +245,37 @@ pub fn getDrive( self : Line ) !GPIO.Drive
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setDrive( self : Line, in_value : GPIO.Drive ) !void
+pub fn setDrive( self : Line, in_drive : Chip.Drive ) !void
 {
-    _= self; _ = in_value; // ### TODO ### implement setDrive
+    if (self.request) |req|
+    {
+        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+
+        lineConfig.lines[0]         = self.line_num;
+        lineConfig.num_lines        = 1;
+        lineConfig.config.num_attrs = 1;
+
+        const attr = &lineConfig.config.attrs[0];
+
+        attr.mask            = 0b1;
+        attr.attr.id         = .flags;
+        attr.attr.data.flags = .{ .open_drain  = (in_drive == .open_drain),
+                                  .open_source = (in_drive == .open_source) };
+
+        try req.setLineConfig( &lineConfig );
+
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getClock( self : Line ) !GPIO.Clock
+pub fn clock( self : Line ) !Chip.Clock
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -182,9 +288,29 @@ pub fn getClock( self : Line ) !GPIO.Clock
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setClock( self : Line, in_value : GPIO.Clock ) !void
+pub fn setClock( self : Line, in_clock: Chip.Clock ) !void
 {
-    _= self; _ = in_value; // ### TODO ### implement setClock
+    if (self.request) |req|
+    {
+        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+
+        lineConfig.lines[0]         = self.line_num;
+        lineConfig.num_lines        = 1;
+        lineConfig.config.num_attrs = 1;
+
+        const attr = &lineConfig.config.attrs[0];
+
+        attr.mask            = 0b1;
+        attr.attr.id         = .flags;
+        attr.attr.data.flags = .{ .event_clock_realtime  = (in_clock == .realtime),
+                                  .event_clock_hte       = (in_clock == .hte) };
+
+        try req.setLineConfig( &lineConfig );
+
+        return;
+    }
+
+    return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -192,7 +318,7 @@ pub fn setClock( self : Line, in_value : GPIO.Clock ) !void
 
 pub fn isActiveLow( self : Line ) !bool
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -202,17 +328,22 @@ pub fn isActiveLow( self : Line ) !bool
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setActiveLow( self : Line, in_active_low : bool ) !void
-{
-    _= self; _ = in_active_low; // ### TODO ### implement setActiveLow
-}
+// pub fn setActiveLow( self : Line, in_active_low : bool ) !void
+// {
+//     if (self.request) |req|
+//     {
+//         _ =  req; _ = in_active_low; error.TODO; // setActiveLow
+//     }
+
+//     return error.NotOpen;
+// }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
 pub fn isUsed( self : Line ) !bool
 {
-    var info : GPIO.LineInfo = undefined;
+    var info : Chip.LineInfo = undefined;
 
     try self.getInfo( &info );
 

@@ -1,7 +1,7 @@
 
 # zliggpio
 
-zliggpio is a Zig module for GPIO input and output.
+zlibgpio is a Zig module for GPIO input and output.
 
 <<TBD>>
 

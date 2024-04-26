@@ -37,8 +37,6 @@
 const std     = @import( "std" );
 
 const Chip    = @import( "chip.zig" );
-const GPIO    = @import( "gpio.zig" );
-
 
 const log     = std.log.scoped( .tests );
 
@@ -70,14 +68,14 @@ test "Chip"
 
 // -----------------------------------------------------------------------------
 
-test "line from name"
+test "line number from name"
 {
     var chip : Chip = .{};
 
     try chip.init( std.testing.allocator, chip_path );
     defer chip.deinit();
 
-    try testing.expectEqual( 22, chip.lineFromName( "GPIO22" ) );
+    try testing.expectEqual( 22, chip.lineNumFromName( "GPIO22" ) );
 }
 
 // -----------------------------------------------------------------------------
@@ -89,7 +87,7 @@ test "get line info"
     try chip.init( std.testing.allocator, chip_path );
     defer chip.deinit();
 
-    var line_info : GPIO.LineInfo = undefined;
+    var line_info : Chip.LineInfo = undefined;
 
     try chip.getLineInfo( 0, &line_info );
 
@@ -135,7 +133,7 @@ test "watch line"
     try chip.init( std.testing.allocator, chip_path );
     defer chip.deinit();
 
-    var line_info : GPIO.LineInfo = undefined;
+    var line_info : Chip.LineInfo = undefined;
 
     try chip.watchLine( 1, &line_info );
 
@@ -155,7 +153,7 @@ test "watch line"
     {
         log.warn( "event at:   {}",  .{ std.time.microTimestamp() } );
 
-        var info_event : [1]GPIO.InfoEvent = undefined;
+        var info_event : [1]Chip.InfoEvent = undefined;
 
         _ = try chip.getInfoEvent( &info_event );
     }
@@ -244,4 +242,133 @@ test "get single line request"
     defer req.deinit();
 
     try testing.expectEqual( false, line.value() );
+}
+
+// -----------------------------------------------------------------------------
+
+test "line direction"
+{
+    var chip : Chip = .{};
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
+    var line        = req.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try req.init( "get line direction" );
+    defer req.deinit();
+
+    try testing.expectEqual( .output, line.direction() );
+
+    try line.setDirection( .input );
+
+    try testing.expectEqual( .input, line.direction() );
+
+    try line.setDirection( .output );
+}
+
+// -----------------------------------------------------------------------------
+
+test "line bias"
+{
+    var chip : Chip = .{};
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
+    var line        = req.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try req.init( "get line direction" );
+    defer req.deinit();
+
+    try testing.expectEqual( .none, line.bias() );
+
+    // try line.setBias( .pull_up );
+
+    // try testing.expectEqual( .pull_up, line.bias() );
+
+    // try line.setBias( .none );
+}
+
+// -----------------------------------------------------------------------------
+
+test "line edge"
+{
+    var chip : Chip = .{};
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
+    var line        = req.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try req.init( "get line direction" );
+    defer req.deinit();
+
+    try testing.expectEqual( .none, line.edge() );
+
+    // try line.setEdge( .both );
+
+    // try testing.expectEqual( .both, line.edge() );
+
+    // try line.setEdge( .none );
+}
+
+// -----------------------------------------------------------------------------
+
+test "line drive"
+{
+    var chip : Chip = .{};
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
+    var line        = req.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try req.init( "get line direction" );
+    defer req.deinit();
+
+    try testing.expectEqual( .none, line.drive() );
+
+    // try line.setDrive( .open_source );
+
+    // try testing.expectEqual( .open_source, line.drive() );
+}
+
+// -----------------------------------------------------------------------------
+
+test "get line clock"
+{
+    var chip : Chip = .{};
+    var line        = chip.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try testing.expectEqual( .none, line.clock() );
+}
+
+// -----------------------------------------------------------------------------
+
+test "get line isActiveLow"
+{
+    var chip : Chip = .{};
+    var line        = chip.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try testing.expectEqual( false, line.isActiveLow() );
+}
+
+// -----------------------------------------------------------------------------
+
+test "get line isUsed"
+{
+    var chip : Chip = .{};
+    var line        = chip.line( 4 );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    try testing.expectEqual( false, line.isUsed() ); // ## TODO ## Why is this false?
 }
