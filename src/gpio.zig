@@ -49,7 +49,7 @@ pub const Ioctl = enum(u32)
     line_info           = 0xC100B405,  // Data: &LineInfo
     watch_line          = 0xC100B406,  // Data: &LineInfo
     line_request        = 0xC250B407,  // Data: &LineRequest
-    unwatch_line        = 0xC004B40C,  // Data: (usize) line number
+    unwatch_line        = 0xC004B40C,  // Data: &usize (line number)
     set_line_config     = 0xC110B40D,  // Data: &LineRequest
     get_line_values     = 0xC010B40E,  // Data: &LineValues
     set_line_values     = 0xC010B40F,  // Data: &LineValues
@@ -58,6 +58,13 @@ pub const Ioctl = enum(u32)
 pub const MAX_NAME_SIZE      = 31;
 pub const MAX_LINES          = 64;
 pub const MAX_LINE_ATTRS     = 10;
+
+pub const Direction = enum{ input, output };
+pub const Bias      = enum{ none, pull_up, pull_down };
+pub const Edge      = enum{ rising, falling, both };
+pub const Bias      = enum{ none, pull_up, pull_down };
+pub const Clock     = enum{ none, realtime, hte };
+pub const Drive     = enum{ push_pull, open_drain, open_source };
 
 // =============================================================================
 //  Public Structures
@@ -96,9 +103,8 @@ pub const LineInfo = extern struct //=> struct gpio_v2_line_info
     flags     : Flags align(8),
     /// The current attributes of this line.
     attrs     : [MAX_LINE_ATTRS]LineAttribute,
-    padding   : [4]u32,
+    _         : [4]u32,
 };
-
 
 // -----------------------------------------------------------------------------
 /// This stucture defines an info event which is read from the Chip's file
@@ -106,9 +112,16 @@ pub const LineInfo = extern struct //=> struct gpio_v2_line_info
 
 pub const InfoEvent = extern struct
 {
-    event_type : InfoEventType,
+    event_type : EventType,
     timestamp  : u64,
     info       : LineInfo,
+
+    pub const EventType = enum(u32)  //=> enum gpiod_info_event_type {getLineInfoEvent}
+    {
+        requested    = 1,
+        released     = 2,
+        reconfigured = 3,
+    };
 };
 
 // -----------------------------------------------------------------------------
@@ -129,7 +142,7 @@ pub const LineRequest = extern struct //=> struct gpio_v2_line_request
     num_lines         : u32,
     /// The size of the event buffer (set to zero for the default size).
     event_buffer_size : u32,
-    padding           : [5]u32,
+    _                 : [5]u32,
     /// Will be set to the file descriptor associated with the request.
     fd                : std.posix.fd_t,
 
@@ -143,7 +156,7 @@ pub const LineRequest = extern struct //=> struct gpio_v2_line_request
         flags     : Flags align(8),
         /// The number of item in the "attrs" array.
         num_attrs : u32,
-        padding   : [5]u32,
+        _         : [5]u32,
         /// Various attributes that might be specified for a line.
         attrs     : [MAX_LINE_ATTRS]ConfigAttribute,
     };
@@ -215,6 +228,27 @@ pub const LineAttribute = extern struct //=> struct gpio_v2_line_attribute
     };
 };
 
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+/// This sturcture is read from a Requests's file descriptor by the
+/// readEdgeEvent function to advise of a change in a line's settings.
+
+pub const EdgeEvent = extern struct  //=> struct gpiod_edge_event
+{
+    event_type   : EventType,
+    timestamp    : u64,
+    line_offset  : u32,
+    global_seqno : c_long,
+    line_seqno   : c_long,
+
+    pub const EventType = enum(u32) //=> enum gpiod_edge_event_type
+    {
+        raising  = 1,
+        falling  = 2,
+    };
+};
+
 // -----------------------------------------------------------------------------
 
 pub const Flags = packed struct (u64) //=> struct gpio_v2_line_flag {getLineInfo, watchLineInfo}
@@ -243,16 +277,7 @@ pub const Flags = packed struct (u64) //=> struct gpio_v2_line_flag {getLineInfo
     event_clock_realtime  : bool,
     /// Set true if the pin uses the hte clock
     event_clock_hte	      : bool,
-    pad                   : u51,
-};
-
-// -----------------------------------------------------------------------------
-
-pub const InfoEventType = enum(u32)  //=> enum gpiod_info_event_type {getLineInfoEvent}
-{
-    requested    = 1,
-    released     = 2,
-    reconfigured = 3,
+    _                     : u51,
 };
 
 // -----------------------------------------------------------------------------
@@ -263,6 +288,13 @@ pub fn ioctl( in_fd    : std.os.linux.fd_t,
               in_ioctl : Ioctl,
               in_data  : *anyopaque ) !usize
 {
+    // We use std.os.linux.ioctl insted of srd.posix.ioctl because we
+    // want to handle certain status values be returning errors instead
+    // of using "unreachable".
+
+    // Oh, and the fact that, at the time of this writing, there was
+    // no posix.ioctl defined in the Zig standard library.
+
     const status : isize = @bitCast( std.os.linux.ioctl(
                                         in_fd,
                                         @intFromEnum( in_ioctl ),
@@ -289,56 +321,34 @@ pub fn ioctl( in_fd    : std.os.linux.fd_t,
 // -----------------------------------------------------------------------------
 //  Function readEvent
 // -----------------------------------------------------------------------------
-/// Call to read an event from a Chip.
+/// Call to read an event from a Chip or Request file descriptor.
 ///
-/// Caller must have made a watch_line ioctl to tell kernel to generate events.
-/// If no event is available this call will block until one becomes available.
-/// If you want to test to see if an event is available, use the pollInfoEvent
-/// call.
-///
-/// Parameters:
-/// - in_fd      the file descriptor of an open Chip stream
-/// - in_timeout timeout in nS.  Pass null for now no timeout.
-
-pub fn readEvent( in_fd     : std.os.linux.fd_t,
-                  out_event : *InfoEvent ) !void
+pub fn readEvent( T          : anytype,
+                  in_fd      : std.os.linux.fd_t,
+                  out_events : []T ) !usize
 {
-    const status : isize = @bitCast( std.os.linux.read(
-                                        in_fd,
-                                        @ptrCast( out_event ),
-                                        @sizeOf( InfoEvent ) ) );
+    const byte_len         = @sizeOf( T ) * out_events.len;
+    const byte_ptr : [*]u8 = @ptrCast( out_events.ptr );
 
-    log.warn( "status: {}", .{ status } );
+    const size = try std.posix.read( in_fd, byte_ptr[0..byte_len] );
 
-    if (status == @sizeOf( InfoEvent )) return;
-
-    log.err( "result: {}", .{ std.posix.errno( status ) } );
-
-    if (status >= 0) return error.BadRead; // ## TODO ## check this code?
-
-    switch (std.posix.errno( status ))
-    {
-        .BUSY    => unreachable,
-        .PERM    => unreachable,
-        .INVAL   => unreachable,
-        .BADF    => unreachable,
-        .FAULT   => unreachable,
-        .NOTTY   => unreachable,
-        else => |err| return std.posix.unexpectedErrno( err ),
-    }
+    return size / @sizeOf( T );
 }
 
 // -----------------------------------------------------------------------------
-//  Function pollInfoEvent
+//  Function pollEvent
 // -----------------------------------------------------------------------------
-/// Call this to determine if an info event is avaiable to read.
+/// Call this to determine if an event is avaiable to read.
 ///
 /// Parameters:
-/// - in_fd      the file descriptor of an open Chip stream
+/// - in_fd      the file descriptor of an open Chip or Request stream
 /// - in_timeout timeout in nS.  Pass null for now no timeout.
+///
+/// Return the number of items of type T that can be read.
 
-pub fn pollInfoEvent( in_fd      : std.os.linux.fd_t,
-                      in_timeout : ?u64 ) !bool
+pub fn pollEvent( T          : anytype,
+                  in_fd      : std.os.linux.fd_t,
+                  in_timeout : ?u64 ) !usize
 {
     var timeout : std.os.linux.timespec = undefined;
 
@@ -348,32 +358,17 @@ pub fn pollInfoEvent( in_fd      : std.os.linux.fd_t,
 		timeout.tv_nsec = @intCast( t % 1_000_000_000 );
 	}
 
-    var pollfd : std.os.linux.pollfd = .{ .fd      = in_fd,
-                                          .events  =   std.os.linux.POLL.IN
-                                                     | std.os.linux.POLL.PRI,
-                                          .revents = 0 };
+    var pollfd : [1]std.posix.pollfd = .{
+                                            .{ .fd      = in_fd,
+                                            .events  =   std.os.linux.POLL.IN
+                                                        | std.os.linux.POLL.PRI,
+                                            .revents = 0
+                                            }
+                                        };
 
-    const status : isize = @bitCast( std.os.linux.ppoll(
-                                        @ptrCast( &pollfd ),
-                                        1,
-                                        if (in_timeout != null) &timeout else null,
-                                        null ) );
+    const size = try std.posix.ppoll( @ptrCast( &pollfd ),
+                                      if (in_timeout != null) &timeout else null,
+                                      null );
 
-    log.warn( "status: {any}", .{ status } );
-
-    if (status == 1) return true;
-    if (status == 0) return false;
-
-    log.err( "result: {}", .{ std.posix.errno( status ) } );
-
-    switch (std.posix.errno( status ))
-    {
-        .BUSY    => unreachable,
-        .PERM    => unreachable,
-        .INVAL   => unreachable,
-        .BADF    => unreachable,
-        .FAULT   => unreachable,
-        .NOTTY   => unreachable,
-        else => |err| return std.posix.unexpectedErrno( err ),
-    }
+    return size / @sizeOf( T );
 }

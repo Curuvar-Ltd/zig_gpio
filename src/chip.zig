@@ -144,7 +144,7 @@ pub fn deinit( self : *Chip ) void
 ///
 /// The Request's init function must be called before using the request.
 
-pub fn request( self : *Chip, in_lines : [] const LineNum ) Request
+pub fn request( self : * const Chip, in_lines : [] const LineNum ) Request
 {
     var req = Request{ .chip  = self,
                        .lines = std.mem.zeroes( LineSet ) };
@@ -220,21 +220,18 @@ pub fn unwatchLine( self     : Chip,
 //  Public Function Chip.getInfoEvent
 // -----------------------------------------------------------------------------
 
-pub fn getInfoEvent( self      : Chip,
-                     out_event : *GPIO.InfoEvent ) !void
+pub inline fn getInfoEvent( self      : Chip,
+                            out_event : []GPIO.InfoEvent ) !usize
 {
-    out_event.* = std.mem.zeroes( GPIO.InfoEvent );
-
-    try GPIO.readEvent( self.fd, out_event );
+    return try GPIO.readEvent( GPIO.InfoEvent, self.fd, out_event );
 }
 
 // -----------------------------------------------------------------------------
 //  Public Function Chip.waitForInfoEvent
 // -----------------------------------------------------------------------------
 
-pub fn waitForInfoEvent( self       : Chip,
-                         in_timeout : ?u64 ) !bool
+pub inline fn waitForInfoEvent( self       : Chip,
+                                in_timeout : ?u64 ) !usize
 {
-    return try GPIO.pollInfoEvent( self.fd, in_timeout );
+    return try GPIO.pollEvent( GPIO.InfoEvent, self.fd, in_timeout );
 }
-

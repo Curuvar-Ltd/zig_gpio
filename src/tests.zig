@@ -101,47 +101,10 @@ test "get line info"
 
 // -----------------------------------------------------------------------------
 
-test "watch line"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    var line_info : GPIO.LineInfo = undefined;
-
-    try chip.watchLine( 1, &line_info );
-
-    log.warn( "\n === Watch Line ===", .{} );
-    log.warn( "line_info.name:       {s}", .{ line_info.name } );
-    log.warn( "line_info.consumer:   {s}", .{ line_info.consumer } );
-    log.warn( "", .{} );
-
-    log.warn( "start time: {}",  .{ std.time.microTimestamp() } );
-
-    if (try chip.waitForInfoEvent( 1_000_000_000 ))
-    {
-        log.warn( "event at:   {}",  .{ std.time.microTimestamp() } );
-
-        var info_event : GPIO.InfoEvent = undefined;
-
-        try chip.getInfoEvent( &info_event );
-    }
-    else
-    {
-        log.warn( "timeout at: {}",  .{ std.time.microTimestamp() } );
-    }
-
-    try chip.unwatchLine( 1 );
-}
-
-// -----------------------------------------------------------------------------
-
 test "line request"
 {
     var chip : Chip = .{};
-    var req         = chip.request( &[_]Chip.LineNum{ 3, 4, 5, 6 } );
-    // var req         = chip.request( .{ 3, 4, 5, 6 } );
+    var req      = chip.request( &.{ 3, 4, 5, 6 } );
 
     try chip.init( std.testing.allocator, chip_path );
     defer chip.deinit();
@@ -164,10 +127,52 @@ test "line request"
 
 // -----------------------------------------------------------------------------
 
+test "watch line"
+{
+    var chip : Chip = .{};
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
+
+    try chip.init( std.testing.allocator, chip_path );
+    defer chip.deinit();
+
+    var line_info : GPIO.LineInfo = undefined;
+
+    try chip.watchLine( 1, &line_info );
+
+    log.warn( "\n === Watch Line ===", .{} );
+    log.warn( "line_info.name:       {s}", .{ line_info.name } );
+    log.warn( "line_info.consumer:   {s}", .{ line_info.consumer } );
+    log.warn( "", .{} );
+
+    log.warn( "start time: {}",  .{ std.time.microTimestamp() } );
+
+    // ### TODO ### why did this request not gerenate an event?
+
+    try req.init( "line request" );
+    defer req.deinit();
+
+    if (try chip.waitForInfoEvent( 1_000_000_000 ) > 0)
+    {
+        log.warn( "event at:   {}",  .{ std.time.microTimestamp() } );
+
+        var info_event : [1]GPIO.InfoEvent = undefined;
+
+        _ = try chip.getInfoEvent( &info_event );
+    }
+    else
+    {
+        log.warn( "timeout at: {}",  .{ std.time.microTimestamp() } );
+    }
+
+    try chip.unwatchLine( 1 );
+}
+
+// -----------------------------------------------------------------------------
+
 test "invalid line request"
 {
     var chip : Chip = .{};
-    var req         = chip.request( &[_]Chip.LineNum{ 62 } ); // No line 62 on chip.
+    var req         = chip.request( &.{ 62 } ); // No line 62 on chip.
 
     try chip.init( std.testing.allocator, chip_path );
     defer chip.deinit();
@@ -181,7 +186,7 @@ test "invalid line request"
 test "busy line request"
 {
     var chip : Chip = .{};
-    var req         = chip.request( &[_]Chip.LineNum{ 7 } ); // Line already "owned".
+    var req         = chip.request( &.{ 7 } ); // Line already "owned".
 
     try chip.init( std.testing.allocator, chip_path );
     defer chip.deinit();
@@ -195,7 +200,7 @@ test "busy line request"
 test "bad single line request"
 {
     var chip : Chip = .{};
-    var req         = chip.request( &[_]Chip.LineNum{ 3, 4, 5, 6 } );
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
     var line        = req.line( 7 );
 
     try chip.init( std.testing.allocator, chip_path );
@@ -212,7 +217,7 @@ test "bad single line request"
 test "set single line request"
 {
     var chip : Chip = .{};
-    var req         = chip.request( &[_]Chip.LineNum{ 3, 4, 5, 6 } );
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
     var line        = req.line( 4 );
 
     try chip.init( std.testing.allocator, chip_path );
@@ -229,7 +234,7 @@ test "set single line request"
 test "get single line request"
 {
     var chip : Chip = .{};
-    var req         = chip.request( &[_]Chip.LineNum{ 3, 4, 5, 6 } );
+    var req         = chip.request( &.{ 3, 4, 5, 6 } );
     var line        = req.line( 4 );
 
     try chip.init( std.testing.allocator, chip_path );

@@ -46,13 +46,6 @@ request  : * const Request,
 line     : Chip.LineNum,
 
 // =============================================================================
-//  Public Constants
-// =============================================================================
-
-pub const Direction = enum{ input, output };
-pub const Bias      = enum{ none, pull_up, pull_down };
-
-// =============================================================================
 //  Public Functions
 // =============================================================================
 
@@ -75,15 +68,29 @@ pub fn setValue( self : Line, in_value : bool ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getDirection( self : Line ) !Direction
+pub inline fn getInfo( self : Line, out_info : *GPIO.LineInfo ) !void
 {
-    _= self; return .input; // ### TODO ### implement getDirection
+    self.line.chip.getLineInfo( self.line, out_info );
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setDirection( self : Line, in_value : bool ) !void
+pub fn getDirection( self : Line ) !GPIO.Direction
+{
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    if (info.flags.output) return .output;
+
+    return .input;
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setDirection( self : Line, in_value : GPIO.Direction ) !void
 {
     _= self; _ = in_value; // ### TODO ### implement setDirection
 }
@@ -91,15 +98,123 @@ pub fn setDirection( self : Line, in_value : bool ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn getBias( self : Line ) !Bias
+pub fn getBias( self : Line ) !GPIO.Bias
 {
-    _= self; return .input; // ### TODO ### implement getBias
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    if (info.flags.bias_pull_up)   return .pull_up;
+    if (info.flags.bias_pull_down) return .pull_down;
+
+    return .none;
 }
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setBias( self : Line, in_value : Bias ) !void
+pub fn setBias( self : Line, in_value : GPIO.Bias ) !void
 {
     _= self; _ = in_value; // ### TODO ### implement setBias
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn getEdge( self : Line ) !GPIO.Edge
+{
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    if (!info.flags.edge_rising)  return .falling;
+    if (!info.flags.edge_falling) return .rising;
+
+    return .both;
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setEdge( self : Line, in_value : GPIO.Edge ) !void
+{
+    _= self; _ = in_value; // ### TODO ### implement setEdge
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn getDrive( self : Line ) !GPIO.Drive
+{
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    if (!info.flags.open_drain)  return .open_source;
+    if (!info.flags.open_source) return .open_drain;
+
+    return .push_pull;
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setDrive( self : Line, in_value : GPIO.Drive ) !void
+{
+    _= self; _ = in_value; // ### TODO ### implement setDrive
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn getClock( self : Line ) !GPIO.Clock
+{
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    if (info.flags.event_clock_realtime) return .realtime;
+    if (info.flags.event_clock_hte)      return .hte;
+
+    return .none;
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setClock( self : Line, in_value : GPIO.Clock ) !void
+{
+    _= self; _ = in_value; // ### TODO ### implement setClock
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn isActiveLow( self : Line ) !bool
+{
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    return info.flags.active_low;
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn setActiveLow( self : Line, in_active_low : bool ) !void
+{
+    _= self; _ = in_active_low; // ### TODO ### implement setActiveLow
+}
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub fn isUsed( self : Line ) !bool
+{
+    var info : GPIO.LineInfo = undefined;
+
+    try self.getInfo( &info );
+
+    return info.flags.used;
 }
