@@ -64,12 +64,6 @@ pub const MAX_NAME_SIZE      = 31;
 pub const MAX_LINES          = 64;
 pub const MAX_LINE_ATTRS     = 10;
 
-pub const Direction = enum{ input, output };
-pub const Bias      = enum{ none, pull_up, pull_down };
-pub const Edge      = enum{ none, rising, falling, both };
-pub const Clock     = enum{ none, realtime, hte };
-pub const Drive     = enum{ none, open_drain, open_source, push_pull };
-
 // =============================================================================
 //  Private Constants
 // =============================================================================
@@ -91,7 +85,8 @@ const Ioctl = enum(u32)
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-/// This structure defines the data format for the .get_info ioctl call.
+/// This structure is used to get information about the Chip itself.
+/// It is filled by the .get_info ioctl.
 
 pub const ChipInfo = extern struct
 {
@@ -104,8 +99,9 @@ pub const ChipInfo = extern struct
 };
 
 // -----------------------------------------------------------------------------
-/// This structure defines the data format for the .line_info and
-/// and .watch_line_info ioctl calls.
+/// This structure contains information about a specific line on a Chip.
+/// It is filled by the .line_info and .watch_line_info ioctls.
+/// It is also used as part of the data returned by an InfoEvent.
 ///
 /// Set the "line" field to the desired line number before making the call.
 
@@ -122,13 +118,15 @@ pub const LineInfo = extern struct //=> struct gpio_v2_line_info
     /// The current flags for this line.
     flags     : Flags align(8),
     /// The current attributes of this line.
-    attrs     : [MAX_LINE_ATTRS]LineAttribute,
+    attrs     : [MAX_LINE_ATTRS] LineAttribute,
     _         : [4]u32,
 };
 
 // -----------------------------------------------------------------------------
-/// This stucture defines an info event which is read from the Chip's file
-/// descriptor.  Info events are provided after makeing a WatchLine call.
+/// This stucture describes the data returned by an info event.  These are
+/// read from the Chip's file descriptor by the getInfoEvent function.
+///
+/// Info events are provided after makeing a WatchLine call.
 
 pub const InfoEvent = extern struct
 {
@@ -145,75 +143,9 @@ pub const InfoEvent = extern struct
 };
 
 // -----------------------------------------------------------------------------
-/// This structure defines the data format for the .line_request and
-/// .set_line_config ioctls.
-
-pub const LineRequest = extern struct //=> struct gpio_v2_line_request
-{
-    /// An array of line numbers to request or configure.  The length
-    /// of this array is stored in element "num_lines".
-    lines             : [MAX_LINES]u32,
-    /// TThe consumer name to tag a line with.  It lets other know
-    /// who is controlling the line.
-    consumer          : [MAX_NAME_SIZE:0]u8,
-    /// Various configuration data for the lines.
-    config            : Config,
-    /// The number of elements in the "lines" array.
-    num_lines         : u32,
-    /// The size of the event buffer (set to zero for the default size).
-    event_buffer_size : u32,
-    _                 : [5]u32,
-    /// Will be set to the file descriptor associated with the request.
-    fd                : std.posix.fd_t,
-
-    // -------------------------------------------------------------------------
-    //  Sub-structures
-    // -------------------------------------------------------------------------
-
-    pub const Config = extern struct  //=> struct gpio_v2_line_config
-    {
-        /// Flags the define the line's state.
-        flags     : Flags align(8),
-        /// The number of item in the "attrs" array.
-        num_attrs : u32,
-        _         : [5]u32,
-        /// Various attributes that might be specified for a line.
-        attrs     : [MAX_LINE_ATTRS]ConfigAttribute,
-    };
-
-    // -------------------------------------------------------------------------
-
-    pub const ConfigAttribute = extern struct //=> struct gpio_v2_line_config_attribute
-    {
-        attr : LineAttribute,
-        mask : u64 align(8),
-    };
-
-    // -------------------------------------------------------------------------
-    //  Public Function LineRequest fillLines
-    // -------------------------------------------------------------------------
-    /// This function files the lines array, and set the num_lines filed
-    /// based on a StaticBitSet indicating the requested lines.
-
-    pub fn fillLines( self          : *LineRequest,
-                      in_mask       : std.StaticBitSet( MAX_LINES ) ) !void
-    {
-        self.num_lines = 0;
-
-        for(0..MAX_LINES) |line_num|
-        {
-            if (in_mask.isSet( line_num ))
-            {
-                self.lines[self.num_lines] = @intCast( line_num );
-                self.num_lines += 1;
-            }
-        }
-    }
-};
-
-// -----------------------------------------------------------------------------
-/// This struct defines the data for the .get_line_values and .set_line_values
-/// ioctl calls.
+/// This struct is filled by the .get_line_values ioctl and read by the
+/// .set_line_values ioctl calls.  It allows quick access to multiple
+/// line values simultaniously.
 
 pub const LineValues = extern struct  //=> struct gpio_v2_line_values
 {
@@ -225,17 +157,24 @@ pub const LineValues = extern struct  //=> struct gpio_v2_line_values
 
 // -----------------------------------------------------------------------------
 /// The line attribute structure discribes a attirbute that a chip's line
-/// might have.
+/// might have. It is filled as part of the Chip's LineInfo structure and
+/// read as part of a Request's LineRequest structure.
+///
+/// This struct forms a type of tagged union.  The id value indicates the
+/// type of the attribute, and the appropriate data element holds the value.
+///
+/// See the description of the LineInfo and LineRequest for more information
+/// about the use of the structure.
 
 pub const LineAttribute = extern struct //=> struct gpio_v2_line_attribute
 {
-    /// The time of this attribute.
+    /// The type of this attribute.
     id   : ID,
     /// The data for this attribute.
     data : extern union
     {
         flags    : Flags, // if .id is .flags
-        values   : u64,   // if .id is .value
+        values   : u64,   // if .id is .values
         debounce : u32,   // if .id is .debounce
     } align( 8 ),
 
@@ -243,32 +182,14 @@ pub const LineAttribute = extern struct //=> struct gpio_v2_line_attribute
     {
         invalid       = 0,
         flags         = 1,
-        value         = 2,
+        values        = 2,
         debounce      = 3,
     };
 };
 
 // -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-/// This sturcture is read from a Requests's file descriptor by the
-/// readEdgeEvent function to advise of a change in a line's settings.
-
-pub const EdgeEvent = extern struct  //=> struct gpiod_edge_event
-{
-    event_type   : EventType,
-    timestamp    : u64,
-    line_offset  : u32,
-    global_seqno : c_long,
-    line_seqno   : c_long,
-
-    pub const EventType = enum(u32) //=> enum gpiod_edge_event_type
-    {
-        raising  = 1,
-        falling  = 2,
-    };
-};
-
-// -----------------------------------------------------------------------------
+/// This is a bitmap indicating various attibutes a line might have.  It forms
+/// part of the LineInfo, LineAttribute, and LineRequest structure definitions.
 
 pub const Flags = packed struct (u64) //=> struct gpio_v2_line_flag {getLineInfo, watchLineInfo}
 {

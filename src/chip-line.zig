@@ -47,6 +47,24 @@ request  : ?* const Request,
 line_num : Chip.LineNum,
 
 // =============================================================================
+//  Private Constants
+// =============================================================================
+
+const Direction      = Request.Direction;
+const Bias           = Request.Bias;
+const Edge           = Request.Edge;
+const Clock          = Request.Clock;
+const Drive          = Request.Drive;
+const LineRequest    = Request.LineRequest;
+
+const LineInfo       = Chip.LineInfo;
+
+// =============================================================================
+//  Public Structures
+// =============================================================================
+
+
+// =============================================================================
 //  Public Functions
 // =============================================================================
 
@@ -80,7 +98,7 @@ pub fn setValue( self : Line, in_value : bool ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub inline fn getInfo( self : Line, out_info : *Chip.LineInfo ) !void
+pub inline fn getInfo( self : Line, out_info : *LineInfo ) !void
 {
     try self.chip.getLineInfo( self.line_num, out_info );
 }
@@ -88,9 +106,9 @@ pub inline fn getInfo( self : Line, out_info : *Chip.LineInfo ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn direction( self : Line ) !Chip.Direction
+pub fn direction( self : Line ) !Direction
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -103,11 +121,11 @@ pub fn direction( self : Line ) !Chip.Direction
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setDirection( self : Line, in_direction : Chip.Direction ) !void
+pub fn setDirection( self : Line, in_direction : Direction ) !void
 {
     if (self.request) |req|
     {
-        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+        var lineConfig = std.mem.zeroes( LineRequest );
 
         lineConfig.lines[0]         = self.line_num;
         lineConfig.num_lines        = 1;
@@ -131,9 +149,9 @@ pub fn setDirection( self : Line, in_direction : Chip.Direction ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn bias( self : Line ) !Chip.Bias
+pub fn bias( self : Line ) !Bias
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -146,11 +164,11 @@ pub fn bias( self : Line ) !Chip.Bias
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setBias( self : Line, in_bias : Chip.Bias ) !void
+pub fn setBias( self : Line, in_bias : Bias ) !void
 {
     if (self.request) |req|
     {
-        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+        var lineConfig = std.mem.zeroes( LineRequest );
 
         lineConfig.lines[0]         = self.line_num;
         lineConfig.num_lines        = 1;
@@ -175,9 +193,9 @@ pub fn setBias( self : Line, in_bias : Chip.Bias ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn edge( self : Line ) !Chip.Edge
+pub fn edge( self : Line ) !Edge
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -195,11 +213,11 @@ pub fn edge( self : Line ) !Chip.Edge
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setEdge( self : Line, in_edge : Chip.Edge ) !void
+pub fn setEdge( self : Line, in_edge : Edge ) !void
 {
     if (self.request) |req|
     {
-        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+        var lineConfig = std.mem.zeroes( LineRequest );
 
         lineConfig.lines[0]         = self.line_num;
         lineConfig.num_lines        = 1;
@@ -225,9 +243,9 @@ pub fn setEdge( self : Line, in_edge : Chip.Edge ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn drive( self : Line ) !Chip.Drive
+pub fn drive( self : Line ) !Drive
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -245,11 +263,11 @@ pub fn drive( self : Line ) !Chip.Drive
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setDrive( self : Line, in_drive : Chip.Drive ) !void
+pub fn setDrive( self : Line, in_drive : Drive ) !void
 {
     if (self.request) |req|
     {
-        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+        var lineConfig = std.mem.zeroes( LineRequest );
 
         lineConfig.lines[0]         = self.line_num;
         lineConfig.num_lines        = 1;
@@ -273,9 +291,9 @@ pub fn setDrive( self : Line, in_drive : Chip.Drive ) !void
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn clock( self : Line ) !Chip.Clock
+pub fn clock( self : Line ) !Clock
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -288,11 +306,11 @@ pub fn clock( self : Line ) !Chip.Clock
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-pub fn setClock( self : Line, in_clock: Chip.Clock ) !void
+pub fn setClock( self : Line, in_clock: Clock ) !void
 {
     if (self.request) |req|
     {
-        var lineConfig = std.mem.zeroes( Chip.LineRequest );
+        var lineConfig = std.mem.zeroes( LineRequest );
 
         lineConfig.lines[0]         = self.line_num;
         lineConfig.num_lines        = 1;
@@ -318,7 +336,7 @@ pub fn setClock( self : Line, in_clock: Chip.Clock ) !void
 
 pub fn isActiveLow( self : Line ) !bool
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
@@ -343,7 +361,7 @@ pub fn isActiveLow( self : Line ) !bool
 
 pub fn isUsed( self : Line ) !bool
 {
-    var info : Chip.LineInfo = undefined;
+    var info : LineInfo = undefined;
 
     try self.getInfo( &info );
 
