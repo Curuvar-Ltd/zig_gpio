@@ -85,9 +85,9 @@ const MAX_NAME_SIZE      = Chip.MAX_NAME_SIZE;
 const MAX_LINES          = Chip.MAX_LINES;
 const MAX_LINE_ATTRS     = Chip.MAX_LINE_ATTRS;
 
+const LineSet            = Chip.LineSet;
 const LineNum            = Chip.LineNum;
 const LineInfo           = Chip.LineInfo;
-const LineValues         = Chip.LineValues;
 const Flags              = Chip.Flags;
 const LineAttribute      = Chip.LineAttribute;
 
@@ -101,58 +101,244 @@ const LineAttribute      = Chip.LineAttribute;
 
 pub const LineRequest = extern struct //=> struct gpio_v2_line_request
 {
-    /// An array of line numbers to request or configure.  The length
-    /// of this array is stored in element "num_lines".
-    lines             : [MAX_LINES]u32,
-    /// TThe consumer name to tag a line with.  It lets other know
-    /// who is controlling the line.
-    consumer          : [MAX_NAME_SIZE:0]u8,
-    /// Various configuration data for the lines.
-    config            : extern struct
-    {
-        /// Flags the define the line's state.
-        flags     : Flags align(8),
-        /// The number of item in the "attrs" array.
-        num_attrs : u32,
-        _         : [5]u32,
-        /// Various attributes that might be specified for a line.
-        attrs     : [MAX_LINE_ATTRS] extern struct
-        {
-            attr : LineAttribute,
-            mask : u64 align(8),
-        },
-    },
+	/// An array of line numbers to request or configure.  The length
+	/// of this array is stored in element "num_lines".
+	lines             : [MAX_LINES]u32,
+	/// TThe consumer name to tag a line with.  It lets other know
+	/// who is controlling the line.
+	consumer          : [MAX_NAME_SIZE:0]u8,
+	/// Flags the define the line's state.
+	flags             : Flags align(8),
+	/// The number of item in the "attrs" array.
+	num_attrs         : u32,
+	_                 : [5]u32,
+	/// Various attributes that might be specified for a line.
+	attrs             : [MAX_LINE_ATTRS] extern struct
+	{
+		attr            : LineAttribute,
+		mask            : u64 align(8),
+	},
+	/// The number of elements in the "lines" array.
+	num_lines         : u32,
+	/// The size of the event buffer (set to zero for the default size).
+	event_buffer_size : u32,
+	__                : [5]u32,
+	/// Will be set to the file descriptor associated with the request.
+	fd                : std.posix.fd_t,
 
-    /// The number of elements in the "lines" array.
-    num_lines         : u32,
-    /// The size of the event buffer (set to zero for the default size).
-    event_buffer_size : u32,
-    _                 : [5]u32,
-    /// Will be set to the file descriptor associated with the request.
-    fd                : std.posix.fd_t,
+	// -------------------------------------------------------------------------
+	//  Public Function LineRequest.buildRequest
+	// -------------------------------------------------------------------------
+	/// This function files the lines array, and set the num_lines filed
+	/// based on a IntegerBitSet indicating the requested lines.
 
-    // -------------------------------------------------------------------------
-    //  Public Function LineRequest.fillLines
-    // -------------------------------------------------------------------------
-    /// This function files the lines array, and set the num_lines filed
-    /// based on a StaticBitSet indicating the requested lines.
+	pub fn buildRequest( self         : *LineRequest,
+	                     in_line_mask : ?LineSet,
+	                     in_config    : [] const LineConfig ) !void
+	{
+		var line_mask : LineSet = .{ .mask = 0 };
 
-    pub fn fillLines( self          : *LineRequest,
-                      in_mask       : std.StaticBitSet( MAX_LINES ) ) !void
-    {
-        self.num_lines = 0;
+		self.* = std.mem.zeroes( LineRequest );
 
-        for(0..MAX_LINES) |line_num|
-        {
-            if (in_mask.isSet( line_num ))
-            {
-                self.lines[self.num_lines] = @intCast( line_num );
-                self.num_lines += 1;
-            }
-        }
-    }
+		// First add any lines from the line mask to the request.
+
+		if (in_line_mask) |mask|
+		{
+			line_mask = mask;
+
+			for(0..MAX_LINES) |line_num|
+			{
+				if (mask.isSet( line_num ))
+				{
+					self.lines[self.num_lines] = @intCast( line_num );
+					self.num_lines += 1;
+				}
+			}
+		}
+
+		// Loop through the LineConfig items...
+
+		for (in_config) |a_config|
+		{
+			log.warn( "a_config: {any}", .{ a_config } );
+
+			var config_mask : u64 = 0;
+
+			// Make sure all lines to be configured are listed in the
+			// "lines" array.
+
+			for (a_config.lines) |a_line|
+			{
+				// If the line is not already in the "lines" array add it.
+				if (!line_mask.isSet( a_line ))
+				{
+					line_mask.set( a_line );
+					self.lines[self.num_lines] = @intCast( a_line );
+					self.num_lines += 1;
+				}
+
+				const position = std.mem.indexOfScalar( u32,
+				                                        &self.lines,
+																								a_line );
+
+				config_mask |= @as( u64, 1 ) << @intCast( position.? );
+			}
+
+			if (a_config.values) |values|
+			{
+				if (values.len != a_config.lines.len) return error.WrongNumberOfValues;
+
+				if (self.num_attrs >= MAX_LINE_ATTRS) return error.ToManyAttributes;
+
+				const an_attr = &(self.attrs[self.num_attrs]);
+				self.num_attrs += 1;
+
+				var value_bits : u64 = 0;
+
+				for (a_config.lines, 0..) |a_line, i|
+				{
+					if (values[i])
+					{
+						const position = std.mem.indexOfScalar( u32,
+						                                        &self.lines,
+																										a_line );
+
+						value_bits |= @as( u64, 1 ) << @intCast( position.? );
+					}
+				}
+
+				an_attr.mask             = config_mask;
+				an_attr.attr.id          = .values;
+				an_attr.attr.data.values = value_bits;
+			}
+
+			if (a_config.debounce) |debounce|
+			{
+				if (self.num_attrs >= MAX_LINE_ATTRS) return error.ToManyAttributes;
+
+				const an_attr = &(self.attrs[self.num_attrs]);
+				self.num_attrs += 1;
+
+				an_attr.mask               = config_mask;
+				an_attr.attr.id            = .debounce;
+				an_attr.attr.data.debounce = debounce;
+			}
+
+			var flags     = std.mem.zeroes( Flags );
+			var flags_set = false;
+
+			if (a_config.direction) |dir|
+			{
+				flags_set = true;
+				switch (dir)
+				{
+					.input  => flags.input  = true,
+					.output => flags.output = true,
+				}
+			}
+
+			if (a_config.bias) |bias|
+			{
+				flags_set = true;
+				switch (bias)
+				{
+					.pull_up =>
+					{
+						flags.input          = true;
+						flags.bias_pull_up   = true;
+					},
+					.pull_down =>
+					{
+						flags.input          = true;
+						flags.bias_pull_down = true;
+					},
+					else =>
+					{
+						flags.input          = true;
+						flags.bias_disabled  = true;
+					},
+				}
+			}
+
+			if (a_config.edge) |edge|
+			{
+				flags_set = true;
+				switch (edge)
+				{
+					.rising =>
+					{
+						flags.input        = true;
+					  flags.edge_rising  = true;
+					},
+					.falling =>
+					{
+						flags.input        = true;
+					  flags.edge_falling = true;
+					},
+					.both =>
+					{
+						flags.input        = true;
+						flags.edge_rising  = true;
+						flags.edge_falling = true;
+					},
+					else => continue,
+				}
+			}
+
+			if (a_config.drive) |drive|
+			{
+				flags_set = true;
+				switch (drive)
+				{
+					.open_drain  => flags.open_drain  = true,
+					.open_source => flags.open_source = true,
+					else         => continue,
+				}
+			}
+
+			if (a_config.clock) |clock|
+			{
+				flags_set = true;
+				switch (clock)
+				{
+					.realtime  => flags.event_clock_realtime  = true,
+					.hte       => flags.event_clock_hte       = true,
+					else         => continue,
+				}
+			}
+
+			if (flags_set)
+			{
+				if (self.num_attrs >= MAX_LINE_ATTRS) return error.ToManyAttributes;
+
+				const an_attr = &(self.attrs[self.num_attrs]);
+				self.num_attrs += 1;
+
+				an_attr.mask            = config_mask;
+				an_attr.attr.id         = .flags;
+				an_attr.attr.data.flags = flags;
+			}
+		}
+	}
 };
 
+// -----------------------------------------------------------------------------
+/// This struct is filled by the .get_line_values ioctl and read by the
+/// .set_line_values ioctl calls.  It allows quick access to multiple
+/// line values simultaniously.
+///
+/// Note that the bit position in both the bits and mask fields are relative
+/// to the request's lines (as defined in Request.LineRequest.lines) not
+/// the chip's.  For example, if the request "owns" lines 3, 4, and 5; the
+/// low order bit of either bits or mask will represent the chips line 3.
+
+pub const LineValues = extern struct  //=> struct gpio_v2_line_values
+{
+	/// The value for each line.
+	bits   : u64 align(8),
+	/// Which lines to get or set.
+	mask   : u64 align(8),
+};
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -161,118 +347,67 @@ pub const LineRequest = extern struct //=> struct gpio_v2_line_request
 
 pub const EdgeEvent = extern struct  //=> struct gpiod_edge_event
 {
-    event_type   : EventType,
-    timestamp    : u64,
-    line_offset  : u32,
-    global_seqno : c_long,
-    line_seqno   : c_long,
+	event_type   : EventType,
+	timestamp    : u64,
+	line_offset  : u32,
+	global_seqno : c_long,
+	line_seqno   : c_long,
 
-    pub const EventType = enum(u32) //=> enum gpiod_edge_event_type
-    {
-        raising  = 1,
-        falling  = 2,
-    };
+	pub const EventType = enum(u32) //=> enum gpiod_edge_event_type
+	{
+		raising  = 1,
+		falling  = 2,
+	};
 };
 
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+pub const LineConfig = struct
+{
+	lines        : [] const LineNum = &.{},
+	values       : ?[] const bool   = null,
+	direction    : ?Direction       = null,
+	bias         : ?Bias            = null,
+	edge         : ?Edge            = null,
+	drive        : ?Drive           = null,
+	clock        : ?Clock           = null,
+	debounce     : ?u32             = null,
+};
 
 // =============================================================================
 //  Public Functions
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-//  Public Function Request.init
+//  Public Function Request.reserve
 // -----------------------------------------------------------------------------
-/// Initialize the Request structure.
+/// Reserve the Request's lines.
 ///
 /// This function request access to the Request's lines and opens a stream
 /// that is used to control and read the requested lines.
-///
-/// Note: The Request's Chip MUST be initialized before calling this function.
 
-pub fn init( self        : *Request,
-             in_consumer : [] const u8 ) !void
+pub fn reserve( self            : *Request,
+								in_consumer     : [] const u8,
+								in_evt_buf_size : u32,
+								in_config       : [] const LineConfig  ) !void
 {
-    assert( in_consumer.len <= MAX_NAME_SIZE );
+	assert( in_consumer.len <= MAX_NAME_SIZE );
 
-    self.deinit();
+	self.release();
 
-    // Create a zero filled LineRequest structure
+	var req : LineRequest = undefined;
 
-    var req = std.mem.zeroes( LineRequest );
+	try req.buildRequest( self.lines, in_config );
 
-    // Fill in the line array and num_lines based on the Request's
-    // lines set.
+	// Note to self: These MUST come after the buildRequest call:
 
-    try req.fillLines( self.lines );
+	std.mem.copyForwards( u8, &req.consumer, in_consumer );
+	req.event_buffer_size = in_evt_buf_size;
 
-    // Fill in the consumer field.
+	_ = try Chip.ioctl( self.chip.fd, .line_request, &req );
 
-    std.mem.copyForwards( u8, &req.consumer, in_consumer );
-
-    // ### TODO ### Set event_buffer_size ##########################
-
-    // req.event_buffer_size = ????;
-
-    // ### TODO ### Set initial output pin values ##########################
-
-    // if (the-req-has-output-pins)
-    // {
-    //     const next_attr = &req.config.attrs[req.config.num_attrs];
-    //     req.config.num_attrs += 1;
-
-    //     next_attr.attr.id = .value;
-    //     next_attr.attr.data.values = value_bits; // u64
-    //     next_attr.mask             = value_mask; // u64
-    // }
-
-    // ### TODO ### Set pin debounce intervals #####################
-
-    // for (each-something) |dbp|
-    // {
-    //     const period      = get-debounce;
-    //     const mask : u64  = 0;
-    //
-    //     for (each-pin) |pin| mask |= @as( u64, 1 ) << pin;
-
-    //     if (req.config.num_attrs >= MAX_LINE_ATTRS) return error.ToManyAttrs;
-
-    //     const next_attr = &req.config.attrs[req.config.num_attrs];
-    //     req.config.num_attrs += 1;
-
-    //     next_attr.attr.id = .debounce;
-    //     next_attr.attr.data.debounce = period; // u64
-    //     next_attr.mask               = mask;      // u64
-    // }
-
-    // #### TODO ### Set flags ###########################
-    //       set pins to .input or .output
-    //       set pins to bias values
-    //       set pins trigger edge
-
-	// ret = set_flags(config, &uapi_cfg->config, &attr_idx);
-
-    // ----- test test test --------
-
-        var flags = std.mem.zeroes( Flags );
-
-        flags.output = true;
-
-        const next_attr = &req.config.attrs[req.config.num_attrs];
-        req.config.num_attrs += 1;
-
-        next_attr.attr.id = .flags;
-        next_attr.attr.data.flags = flags;   // u64
-        next_attr.mask            = 0b0010;  // u64
-
-    // ----- test test test --------
-
-    // -- C version does get_info ioctl here to get chip name. --
-
-    _ = try Chip.ioctl( self.chip.fd, .line_request, &req );
-
-    log.warn( "Request Lines: {any}", .{ req.lines[0..req.num_lines] } );
-
-    self.fd = req.fd;
+	self.fd = req.fd;
 }
 
 // -----------------------------------------------------------------------------
@@ -280,27 +415,31 @@ pub fn init( self        : *Request,
 // -----------------------------------------------------------------------------
 /// Close the stream for this Request.
 
-pub fn deinit( self : *Request ) void
+pub fn release( self : *Request ) void
 {
-    if (self.fd) |fd|
-    {
-        _ = std.os.linux.close( fd );
-        self.fd = null;
-    }
+	if (self.fd) |fd|
+	{
+		_ = std.os.linux.close( fd );
+		self.fd = null;
+	}
 }
 
 // -----------------------------------------------------------------------------
 //  Public Function line
 // -----------------------------------------------------------------------------
-/// Return a Line struct used to control a singe line from this request.
+/// Return a Line struct used to control a single line from this request.
 ///
-/// This function may be called before the Request is initialized.
+/// This function may be called before the Request's reserve function is
+/// called.
 
-pub inline fn line( self : *Request, in_line : LineNum ) Line
+pub inline fn line( self : *Request, in_line : LineNum ) !Line
 {
-    return .{ .chip     = self.chip,
-              .request  = self,
-              .line_num = in_line };
+	if (!self.lines.isSet( in_line )) return error.InvalidRequest;
+
+	const the_line : Line =  .{ .chip     = self.chip,
+	                         .request  = self,
+	                         .line_num = in_line };
+	return the_line;
 }
 
 // -----------------------------------------------------------------------------
@@ -314,7 +453,7 @@ pub inline fn getLineInfo( self     : Request,
                            in_line  : LineNum,
                            out_info : *LineInfo ) !void
 {
-    try self.chip.getLineInfo( in_line, out_info );
+	try self.chip.getLineInfo( in_line, out_info );
 }
 
 // -----------------------------------------------------------------------------
@@ -322,22 +461,22 @@ pub inline fn getLineInfo( self     : Request,
 // -----------------------------------------------------------------------------
 /// Update the confguration of selected line.
 
-pub fn setLineConfig( self       : * const Request,
-                      in_request : *LineRequest ) !void
+pub fn setLineConfig( self      : * const Request,
+                      in_config : [] const LineConfig ) !void
 {
-    if (self.fd) |fd|
-    {
-        // ### TODO ### Make sure line number are OK for the request
+	if (self.fd) |fd|
+	{
+		var req : LineRequest = undefined;
 
-        _ = try Chip.ioctl( fd, .set_line_config, in_request );
+		try req.buildRequest( null, in_config );
 
-        return;
-    }
+		_ = try Chip.ioctl( fd, .set_line_config, &req );
 
-    return error.NotOpen;
+		return;
+	}
+
+	return error.NotOpen;
 }
-
-
 
 // -----------------------------------------------------------------------------
 //  Public Function getLineValuesMasked
@@ -350,16 +489,16 @@ pub fn setLineConfig( self       : * const Request,
 pub fn getLineValuesMasked( self    : Request,
                             in_mask : u64 ) !u64
 {
-    if (self.fd) |fd|
-    {
-        var lv : LineValues = .{ .bits = 0, .mask = in_mask };
+	if (self.fd) |fd|
+	{
+		var lv : LineValues = .{ .bits = 0, .mask = in_mask };
 
-        _ = try Chip.ioctl( fd, .get_line_values, &lv );
+		_ = try Chip.ioctl( fd, .get_line_values, &lv );
 
-        return lv.bits;
-    }
+		return lv.bits;
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -377,40 +516,40 @@ pub fn getLineValuesMasked( self    : Request,
 
 pub fn getLineValues( self : Request ) ![]?bool
 {
-    if (self.fd) |fd|
-    {
-        var lv : LineValues = .{ .bits = 0,
-                                .mask = 0xFFFF_FFFF_FFFF_FFFF };
+	if (self.fd) |fd|
+	{
+		var lv : LineValues = .{ .bits = 0,
+		                      .mask = 0xFFFF_FFFF_FFFF_FFFF };
 
-        _ = try Chip.ioctl( fd, .get_line_values, &lv );
+		_ = try Chip.ioctl( fd, .get_line_values, &lv );
 
-        var retval = try self.chip.allocator.alloc( ?bool,
-                                                    self.chip.info.line_count );
+		var retval = try self.chip.allocator.alloc( ?bool,
+		                                            self.chip.info.line_count );
 
-        errdefer self.chip.allocator.free( retval );
+		errdefer self.chip.allocator.free( retval );
 
-        var line_index : LineNum = 0;
-        var bit_mask   : u64          = 1;
+		var line_index : LineNum = 0;
+		var bit_mask   : u64          = 1;
 
-        for (0..self.chip.info.line_count) |i|
-        {
-            if (self.lines.isSet( line_index ))
-            {
-                retval[i] = (lv.bits & bit_mask) != 0;
-                bit_mask <<= 1;
-            }
-            else
-            {
-                retval[i] = null;
-            }
+		for (0..self.chip.info.line_count) |i|
+		{
+			if (self.lines.isSet( line_index ))
+			{
+				retval[i] = (lv.bits & bit_mask) != 0;
+				bit_mask <<= 1;
+			}
+			else
+			{
+				retval[i] = null;
+			}
 
-            line_index += 1;
-        }
+			line_index += 1;
+		}
 
-        return retval;
-    }
+		return retval;
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -425,33 +564,33 @@ pub fn getLineValues( self : Request ) ![]?bool
 
 pub fn getLineValue( self : Request, in_line : LineNum ) !bool
 {
-    if (!self.lines.isSet( in_line )) return error.NotRequested;
+	if (!self.lines.isSet( in_line )) return error.NotRequested;
 
-    if (self.fd) |fd|
-    {
-        var lv : LineValues = .{ .bits = 0,
-                                       .mask = 0xFFFF_FFFF_FFFF_FFFF };
+	if (self.fd) |fd|
+	{
+		var lv : LineValues = .{ .bits = 0,
+		                         .mask = 0xFFFF_FFFF_FFFF_FFFF };
 
-        _ = try Chip.ioctl( fd, .get_line_values, &lv );
+		_ = try Chip.ioctl( fd, .get_line_values, &lv );
 
-        var line_index : LineNum = 0;
-        var bit_mask   : u64          = 1;
+		var line_index : LineNum = 0;
+		var bit_mask   : u64          = 1;
 
-        for (0..self.chip.info.line_count) |i|
-        {
-            if (self.lines.isSet( line_index ))
-            {
-                if (i == in_line) return  (lv.bits & bit_mask) != 0;
-                bit_mask <<= 1;
-            }
+		for (0..self.chip.info.line_count) |i|
+		{
+			if (self.lines.isSet( line_index ))
+			{
+				if (i == in_line) return  (lv.bits & bit_mask) != 0;
+				bit_mask <<= 1;
+			}
 
-            line_index += 1;
-        }
+			line_index += 1;
+		}
 
-        unreachable;
-    }
+		unreachable;
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -467,16 +606,16 @@ pub fn setLineValuesMasked( self      : Request,
                             in_mask   : u64,
                             in_values : u64 ) !void
 {
-    if (self.fd) |fd|
-    {
-        var lv : LineValues = .{ .bits = in_values, .mask = in_mask };
+	if (self.fd) |fd|
+	{
+		var lv : LineValues = .{ .bits = in_values, .mask = in_mask };
 
-        _ = try Chip.ioctl( fd, .set_line_values, &lv );
+		_ = try Chip.ioctl( fd, .set_line_values, &lv );
 
-        return;
-    }
+		return;
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -526,36 +665,36 @@ pub fn setLineValue( self     : Request,
                      in_line  : LineNum,
                      in_value : bool ) !void
 {
-    if (!self.lines.isSet( in_line )) return error.NotRequested;
+	if (!self.lines.isSet( in_line )) return error.NotRequested;
 
-    if (self.fd) |fd|
-    {
-        var line_index : LineNum = 0;
-        var bit_mask   : u64     = 1;
+	if (self.fd) |fd|
+	{
+		var line_index : LineNum = 0;
+		var bit_mask   : u64     = 1;
 
-        for (0..self.chip.info.line_count) |i|
-        {
-            if (self.lines.isSet( line_index ))
-            {
-                if (i == in_line)
-                {
-                    var lv : LineValues = .{ .bits = if (in_value) bit_mask else 0,
-                                             .mask = bit_mask };
+		for (0..self.chip.info.line_count) |i|
+		{
+			if (self.lines.isSet( line_index ))
+			{
+				if (i == in_line)
+				{
+					var lv : LineValues = .{ .bits = if (in_value) bit_mask else 0,
+																		.mask = bit_mask };
 
-                    _ = try Chip.ioctl( fd, .set_line_values, &lv );
+					_ = try Chip.ioctl( fd, .set_line_values, &lv );
 
-                    return;
-                }
-                bit_mask <<= 1;
-            }
+					return;
+				}
+				bit_mask <<= 1;
+			}
 
-            line_index += 1;
-        }
+			line_index += 1;
+		}
 
-        unreachable;
-    }
+		unreachable;
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -565,7 +704,7 @@ pub fn setLineValue( self     : Request,
 pub inline fn getEdgeEvent( self      : Request,
                             out_event : []EdgeEvent ) !usize
 {
-    return try Chip.readEvent( EdgeEvent, self.fd, out_event );
+	return try Chip.readEvent( EdgeEvent, self.fd, out_event );
 }
 
 // -----------------------------------------------------------------------------
@@ -575,6 +714,5 @@ pub inline fn getEdgeEvent( self      : Request,
 pub inline fn waitForEdgeEvent( self       : Request,
                                 in_timeout : ?u64 ) !usize
 {
-    return try Chip.pollEvent( EdgeEvent, self.fd, in_timeout );
+	return try Chip.pollEvent( EdgeEvent, self.fd, in_timeout );
 }
-

@@ -33,6 +33,23 @@
 
 /// This structure is used to control a single line_num.
 
+////////////////////////////////////////////////////////////
+//  set_offsets
+//    .num_line <== config->num_configs
+//    .lines[n] <== config->line_configs[n].offset
+//  set_output_values
+//    add a single ".values" entry to .attrs with .attr.values <== val
+//       and .mask = mask (kernel)
+//    .num_attrs += 1;
+//  set_debounce_periods
+//    add a multiple ".debounce" entry to .attrs with .attr.debounce <== val
+//       and .mask = mask (kernel) pins to get the debounce
+//    .num_attrs += 1;
+//  set_flags
+//    fill global flags first then add .flags entry to .attrs.
+//
+////////////////////////////////////////////////////////////
+
 const std     = @import( "std" );
 
 const Line    = @This();
@@ -42,9 +59,14 @@ const Request = @import( "chip-request.zig" );
 const log    = std.log.scoped( .chip_request_line );
 const assert = std.debug.assert;
 
+/// The Chip contining the requested lines.
 chip     : * const Chip,
-request  : ?* const Request,
+/// The line number within the chip.
 line_num : Chip.LineNum,
+/// A Request, that should contain the line.  If the indicated request
+/// does not contain the line or is null, this Line structure can only
+/// be used to read values and settings.
+request  : ?* const Request,
 
 // =============================================================================
 //  Private Constants
@@ -59,10 +81,6 @@ const LineRequest    = Request.LineRequest;
 
 const LineInfo       = Chip.LineInfo;
 
-// =============================================================================
-//  Public Structures
-// =============================================================================
-
 
 // =============================================================================
 //  Public Functions
@@ -73,12 +91,12 @@ const LineInfo       = Chip.LineInfo;
 
 pub fn value( self : Line ) !bool
 {
-    if (self.request) |req|
-    {
-        return try req.getLineValue( self.line_num );
-    }
+	if (self.request) |req|
+	{
+		return try req.getLineValue( self.line_num );
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -86,13 +104,13 @@ pub fn value( self : Line ) !bool
 
 pub fn setValue( self : Line, in_value : bool ) !void
 {
-    if (self.request) |req|
-    {
-        try req.setLineValue( self.line_num, in_value );
-        return;
-    }
+	if (self.request) |req|
+	{
+		try req.setLineValue( self.line_num, in_value );
+		return;
+	}
 
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -100,7 +118,7 @@ pub fn setValue( self : Line, in_value : bool ) !void
 
 pub inline fn getInfo( self : Line, out_info : *LineInfo ) !void
 {
-    try self.chip.getLineInfo( self.line_num, out_info );
+	try self.chip.getLineInfo( self.line_num, out_info );
 }
 
 // -----------------------------------------------------------------------------
@@ -108,14 +126,14 @@ pub inline fn getInfo( self : Line, out_info : *LineInfo ) !void
 
 pub fn direction( self : Line ) !Direction
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    if (info.flags.output) return .output;
-    if (info.flags.input)  return .input;
+	if (info.flags.output) return .output;
+	if (info.flags.input)  return .input;
 
-    return error.InvalidDirection;
+	return error.InvalidDirection;
 }
 
 // -----------------------------------------------------------------------------
@@ -123,27 +141,14 @@ pub fn direction( self : Line ) !Direction
 
 pub fn setDirection( self : Line, in_direction : Direction ) !void
 {
-    if (self.request) |req|
-    {
-        var lineConfig = std.mem.zeroes( LineRequest );
+	if (self.request) |req|
+	{
+		try req.setLineConfig( &.{ .{ .lines     = &.{ self.line_num },
+		                              .direction = in_direction } } );
+		return;
+	}
 
-        lineConfig.lines[0]         = self.line_num;
-        lineConfig.num_lines        = 1;
-        lineConfig.config.num_attrs = 1;
-
-        const attr = &lineConfig.config.attrs[0];
-
-        attr.mask            = 0b1;
-        attr.attr.id         = .flags;
-        attr.attr.data.flags = .{ .input  = (in_direction == .input),
-                                  .output = (in_direction == .output) };
-
-        try req.setLineConfig( &lineConfig );
-
-        return;
-    }
-
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -151,14 +156,14 @@ pub fn setDirection( self : Line, in_direction : Direction ) !void
 
 pub fn bias( self : Line ) !Bias
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    if (info.flags.bias_pull_up)   return .pull_up;
-    if (info.flags.bias_pull_down) return .pull_down;
+	if (info.flags.bias_pull_up)   return .pull_up;
+	if (info.flags.bias_pull_down) return .pull_down;
 
-    return .none;
+	return .none;
 }
 
 // -----------------------------------------------------------------------------
@@ -166,28 +171,14 @@ pub fn bias( self : Line ) !Bias
 
 pub fn setBias( self : Line, in_bias : Bias ) !void
 {
-    if (self.request) |req|
-    {
-        var lineConfig = std.mem.zeroes( LineRequest );
+	if (self.request) |req|
+	{
+		try req.setLineConfig( &.{ .{ .lines = &.{ self.line_num },
+		                              .bias  = in_bias } } );
+		return;
+	}
 
-        lineConfig.lines[0]         = self.line_num;
-        lineConfig.num_lines        = 1;
-        lineConfig.config.num_attrs = 1;
-
-        const attr = &lineConfig.config.attrs[0];
-
-        attr.mask            = 0b1;
-        attr.attr.id         = .flags;
-        attr.attr.data.flags = .{ .bias_pull_up   = (in_bias == .pull_up),
-                                  .bias_pull_down = (in_bias == .pull_down),
-                                  .bias_disabled  = (in_bias == .none ) };
-
-        try req.setLineConfig( &lineConfig );
-
-        return;
-    }
-
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -195,19 +186,19 @@ pub fn setBias( self : Line, in_bias : Bias ) !void
 
 pub fn edge( self : Line ) !Edge
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    if (!info.flags.edge_rising)
-    {
-        if (!info.flags.edge_falling) return .none;
-        return .falling;
-    }
+	if (!info.flags.edge_rising)
+	{
+		if (!info.flags.edge_falling) return .none;
+		return .falling;
+	}
 
-    if (!info.flags.edge_falling) return .rising;
+	if (!info.flags.edge_falling) return .rising;
 
-    return .both;
+	return .both;
 }
 
 // -----------------------------------------------------------------------------
@@ -215,29 +206,15 @@ pub fn edge( self : Line ) !Edge
 
 pub fn setEdge( self : Line, in_edge : Edge ) !void
 {
-    if (self.request) |req|
-    {
-        var lineConfig = std.mem.zeroes( LineRequest );
+	if (self.request) |req|
+	{
+		try req.setLineConfig( &.{ .{ .lines = &.{ self.line_num },
+		                              .edge  = in_edge } } );
 
-        lineConfig.lines[0]         = self.line_num;
-        lineConfig.num_lines        = 1;
-        lineConfig.config.num_attrs = 1;
+		return;
+	}
 
-        const attr = &lineConfig.config.attrs[0];
-
-        attr.mask            = 0b1;
-        attr.attr.id         = .flags;
-        attr.attr.data.flags = .{ .edge_rising  = (   in_edge == .rising
-                                                   or in_edge == .both ),
-                                  .edge_falling = (   in_edge == .falling
-                                                   or in_edge == .both ) };
-
-        try req.setLineConfig( &lineConfig );
-
-        return;
-    }
-
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -245,19 +222,19 @@ pub fn setEdge( self : Line, in_edge : Edge ) !void
 
 pub fn drive( self : Line ) !Drive
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    if (!info.flags.open_drain)
-    {
-        if (!info.flags.open_source) return .none;
-        return .open_source;
-    }
+	if (!info.flags.open_drain)
+	{
+		if (!info.flags.open_source) return .none;
+		return .open_source;
+	}
 
-    if (!info.flags.open_source) return .open_drain;
+	if (!info.flags.open_source) return .open_drain;
 
-    return .push_pull;
+	return .push_pull;
 }
 
 // -----------------------------------------------------------------------------
@@ -265,27 +242,14 @@ pub fn drive( self : Line ) !Drive
 
 pub fn setDrive( self : Line, in_drive : Drive ) !void
 {
-    if (self.request) |req|
-    {
-        var lineConfig = std.mem.zeroes( LineRequest );
+	if (self.request) |req|
+	{
+		try req.setLineConfig( &.{ .{ .lines = &.{ self.line_num },
+		                              .drive = in_drive } } );
+		return;
+	}
 
-        lineConfig.lines[0]         = self.line_num;
-        lineConfig.num_lines        = 1;
-        lineConfig.config.num_attrs = 1;
-
-        const attr = &lineConfig.config.attrs[0];
-
-        attr.mask            = 0b1;
-        attr.attr.id         = .flags;
-        attr.attr.data.flags = .{ .open_drain  = (in_drive == .open_drain),
-                                  .open_source = (in_drive == .open_source) };
-
-        try req.setLineConfig( &lineConfig );
-
-        return;
-    }
-
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -293,14 +257,14 @@ pub fn setDrive( self : Line, in_drive : Drive ) !void
 
 pub fn clock( self : Line ) !Clock
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    if (info.flags.event_clock_realtime) return .realtime;
-    if (info.flags.event_clock_hte)      return .hte;
+	if (info.flags.event_clock_realtime) return .realtime;
+	if (info.flags.event_clock_hte)      return .hte;
 
-    return .none;
+	return .none;
 }
 
 // -----------------------------------------------------------------------------
@@ -308,27 +272,14 @@ pub fn clock( self : Line ) !Clock
 
 pub fn setClock( self : Line, in_clock: Clock ) !void
 {
-    if (self.request) |req|
-    {
-        var lineConfig = std.mem.zeroes( LineRequest );
+	if (self.request) |req|
+	{
+		try req.setLineConfig( &.{ .{ .lines = &.{ self.line_num },
+		                              .clock = in_clock } } );
+		return;
+	}
 
-        lineConfig.lines[0]         = self.line_num;
-        lineConfig.num_lines        = 1;
-        lineConfig.config.num_attrs = 1;
-
-        const attr = &lineConfig.config.attrs[0];
-
-        attr.mask            = 0b1;
-        attr.attr.id         = .flags;
-        attr.attr.data.flags = .{ .event_clock_realtime  = (in_clock == .realtime),
-                                  .event_clock_hte       = (in_clock == .hte) };
-
-        try req.setLineConfig( &lineConfig );
-
-        return;
-    }
-
-    return error.NotOpen;
+	return error.NotOpen;
 }
 
 // -----------------------------------------------------------------------------
@@ -336,11 +287,11 @@ pub fn setClock( self : Line, in_clock: Clock ) !void
 
 pub fn isActiveLow( self : Line ) !bool
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    return info.flags.active_low;
+	return info.flags.active_low;
 }
 
 // -----------------------------------------------------------------------------
@@ -348,10 +299,10 @@ pub fn isActiveLow( self : Line ) !bool
 
 // pub fn setActiveLow( self : Line, in_active_low : bool ) !void
 // {
-//     if (self.request) |req|
-//     {
-//         _ =  req; _ = in_active_low; error.TODO; // setActiveLow
-//     }
+//   if (self.request) |req|
+//   {
+//     _ =  req; _ = in_active_low; error.TODO; // setActiveLow
+//   }
 
 //     return error.NotOpen;
 // }
@@ -361,9 +312,9 @@ pub fn isActiveLow( self : Line ) !bool
 
 pub fn isUsed( self : Line ) !bool
 {
-    var info : LineInfo = undefined;
+	var info : LineInfo = undefined;
 
-    try self.getInfo( &info );
+	try self.getInfo( &info );
 
-    return info.flags.used;
+	return info.flags.used;
 }

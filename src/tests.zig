@@ -37,6 +37,8 @@
 const std     = @import( "std" );
 
 const Chip    = @import( "chip.zig" );
+const Request = @import( "chip-request.zig" );
+const Line    = @import( "chip-line.zig" );
 
 const log     = std.log.scoped( .tests );
 
@@ -49,326 +51,301 @@ const testing   = std.testing;
 const chip_path =  "/dev/gpiochip0";
 
 // -----------------------------------------------------------------------------
+// Test the Chip's, init, deinit, request, lineNumFromName, getLineInfo, and
+// ioctl functions.
 
-test "Chip"
+test "Chip Tests"
 {
-    var chip : Chip = .{};
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try testing.expect( chip.fd != 0xFFFF_FFFF );
+	var line_info : Chip.LineInfo = undefined;
 
-    log.warn( "", .{} );
-    log.warn( "chip info.name:       {s}", .{ chip.info.name } );
-    log.warn( "chip info.label:      {s}", .{ chip.info.label } );
-    log.warn( "chip info.line_count: {}",  .{ chip.info.line_count } );
-    log.warn( "", .{} );
+	try chip.getLineInfo( try chip.lineNumFromName( "GPIO22" ), &line_info );
+
+	log.warn( "chip info.name:       {s}", .{ chip.info.name } );
+	log.warn( "chip info.label:      {s}", .{ chip.info.label } );
+	log.warn( "chip info.line_count: {}",  .{ chip.info.line_count } );
+	log.warn( "line_info.line:       {}",    .{ line_info.line } );
+	log.warn( "line_info.name:       {s}",   .{ line_info.name } );
+	log.warn( "line_info.consumer:   {s}",   .{ line_info.consumer } );
+	log.warn( "line_info.flags:      {any}", .{ line_info.flags } );
+	log.warn( "line_info.num_attrs:  {}",    .{ line_info.num_attrs } );
+
+	try testing.expectEqual( 22,       line_info.line );
 }
 
 // -----------------------------------------------------------------------------
-
-test "line number from name"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    try testing.expectEqual( 22, chip.lineNumFromName( "GPIO22" ) );
-}
-
-// -----------------------------------------------------------------------------
-
-test "get line info"
-{
-    var chip : Chip = .{};
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    var line_info : Chip.LineInfo = undefined;
-
-    try chip.getLineInfo( 0, &line_info );
-
-    log.warn( "", .{} );
-    log.warn( "line_info.name:       {s}", .{ line_info.name } );
-    log.warn( "line_info.consumer:   {s}", .{ line_info.consumer } );
-    log.warn( "", .{} );
-}
-
-// -----------------------------------------------------------------------------
+// Test the Chip's request function.
 
 test "line request"
 {
-    var chip : Chip = .{};
-    var req      = chip.request( &.{ 3, 4, 5, 6 } );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "line request" );
-    defer req.deinit();
+	try testing.expectError( error.InvalidRequest, chip.request( &.{ 62 } ) );
 
-    log.warn( "Request fd     {?}",   .{ req.fd } );
+	var req = try chip.request( &.{ 7 } ); // Line already "owned".
 
-    var lv = try req.getLineValuesMasked( 0xFFFF_FFFF_FFFF_FFFF );
+	try testing.expectError( error.LineBusy, req.reserve( "busy", 0, &.{} ) );
 
-    log.warn( "Orig  values {b:0>64}", .{ lv } );
+	req = try chip.request( &.{ 3, 4, 5, 6 } );
 
-    try req.setLineValuesMasked( 0b0010, 0b0010 );
+	try req.reserve( "testing", 0, &.{ .{ .lines     = &.{ 4 },
+		                                    .direction = .output } } );
+	defer req.release();
 
-    lv = try req.getLineValuesMasked( 0xFFFF_FFFF_FFFF_FFFF );
+	log.warn( "Request fd     {?}",   .{ req.fd } );
 
-    log.warn( "Final values {b:0>64}", .{ lv } );
+	var lv = try req.getLineValuesMasked( 0xFFFF_FFFF_FFFF_FFFF );
+
+	log.warn( "Orig  values {b:0>64}", .{ lv } );
+
+	try req.setLineValuesMasked( 0b0010, 0b0010 );
+
+	lv = try req.getLineValuesMasked( 0xFFFF_FFFF_FFFF_FFFF );
+
+	log.warn( "Final values {b:0>64}", .{ lv } );
 }
 
 // -----------------------------------------------------------------------------
+// Test the Chip's, watchLine, unwatchLine, waitInfoEvent, getInfoEvent,
+// pollEvent, and readEvent functions.
 
 test "watch line"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    var line_info : Chip.LineInfo = undefined;
+	var req = try chip.request( &.{ 3, 4, 5, 6 } );
 
-    try chip.watchLine( 1, &line_info );
+	var line_info : Chip.LineInfo = undefined;
 
-    log.warn( "\n === Watch Line ===", .{} );
-    log.warn( "line_info.name:       {s}", .{ line_info.name } );
-    log.warn( "line_info.consumer:   {s}", .{ line_info.consumer } );
-    log.warn( "", .{} );
+	try chip.watchLine( 3, &line_info );
 
-    log.warn( "start time: {}",  .{ std.time.microTimestamp() } );
+	log.warn( "\n === Watch Line ===", .{} );
+	log.warn( "line_info.line:       {}",    .{ line_info.line } );
+	log.warn( "line_info.name:       {s}",   .{ line_info.name } );
+	log.warn( "line_info.consumer:   {s}",   .{ line_info.consumer } );
+	log.warn( "line_info.flags:      {any}", .{ line_info.flags } );
+	log.warn( "line_info.num_attrs:  {}",    .{ line_info.num_attrs } );
+	log.warn( "", .{} );
 
-    // ### TODO ### why did this request not gerenate an event?
+	log.warn( "start time: {}",  .{ std.time.microTimestamp() } );
 
-    try req.init( "line request" );
-    defer req.deinit();
+	// ### TODO ### why did this request not gerenate an event?
 
-    if (try chip.waitForInfoEvent( 1_000_000_000 ) > 0)
-    {
-        log.warn( "event at:   {}",  .{ std.time.microTimestamp() } );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
 
-        var info_event : [1]Chip.InfoEvent = undefined;
+	if (try chip.waitForInfoEvent( 1_000_000_000 ) > 0)
+	{
+		log.warn( "event at:   {}",  .{ std.time.microTimestamp() } );
 
-        _ = try chip.getInfoEvent( &info_event );
-    }
-    else
-    {
-        log.warn( "timeout at: {}",  .{ std.time.microTimestamp() } );
-    }
+		var info_event : [1]Chip.InfoEvent = undefined;
 
-    try chip.unwatchLine( 1 );
-}
+		_ = try chip.getInfoEvent( &info_event );
 
-// -----------------------------------------------------------------------------
+		log.warn( "", .{} );
+		log.warn( "line_info.flags:      {any}", .{ info_event } );
+		log.warn( "", .{} );
+	}
+	else
+	{
+		log.warn( "timeout at: {}",  .{ std.time.microTimestamp() } );
+	}
 
-test "invalid line request"
-{
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 62 } ); // No line 62 on chip.
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    try testing.expectError( error.InvalidRequest,
-                             req.init( "invalid line request" ) );
-}
-
-// -----------------------------------------------------------------------------
-
-test "busy line request"
-{
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 7 } ); // Line already "owned".
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    try testing.expectError( error.LineBusy,
-                             req.init( "busy line request" ) );
-}
-
-// -----------------------------------------------------------------------------
-
-test "bad single line request"
-{
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 7 );
-
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
-
-    try req.init( "line request" );
-    defer req.deinit();
-
-    try testing.expectError( error.NotRequested, line.value() );
+	try chip.unwatchLine( 3 );
 }
 
 // -----------------------------------------------------------------------------
 
 test "set single line request"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "line request" );
-    defer req.deinit();
+	var req  = try chip.request( &.{ 3, 4, 5, 6 } );
+	var line = try req.line( 4 );
 
-    try line.setValue( false );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
+
+	try line.setValue( false );
 }
 
 // -----------------------------------------------------------------------------
 
 test "get single line request"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "line request" );
-    defer req.deinit();
+	var req  = try chip.request( &.{ 3, 4, 5, 6 } );
+	var line = try req.line( 4 );
 
-    try testing.expectEqual( false, line.value() );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
+
+	try testing.expectEqual( false, line.value() );
 }
 
 // -----------------------------------------------------------------------------
 
 test "line direction"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "get line direction" );
-    defer req.deinit();
+	var req  = try chip.request( &.{ 3, 4, 5, 6 } );
+	var line = try req.line( 4 );
 
-    try testing.expectEqual( .output, line.direction() );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
 
-    try line.setDirection( .input );
+	try line.setDirection( .input );
 
-    try testing.expectEqual( .input, line.direction() );
+	try testing.expectEqual( .input, line.direction() );
 
-    try line.setDirection( .output );
+	try line.setDirection( .output );
+
+	try testing.expectEqual( .output, line.direction() );
 }
 
 // -----------------------------------------------------------------------------
 
 test "line bias"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "get line direction" );
-    defer req.deinit();
+	var req  = try chip.request( &.{ 3, 4, 5, 6 } );
+	var line = try req.line( 3 );
 
-    try testing.expectEqual( .none, line.bias() );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
 
-    // try line.setBias( .pull_up );
+	log.warn( "direction: {any}", .{ try line.direction() } );
 
-    // try testing.expectEqual( .pull_up, line.bias() );
+	try testing.expectEqual( .none, line.bias() );
 
-    // try line.setBias( .none );
+	try line.setBias( .pull_up );
+
+	try testing.expectEqual( .pull_up, line.bias() );
+
+	try line.setBias( .none );
 }
 
 // -----------------------------------------------------------------------------
 
 test "line edge"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "get line direction" );
-    defer req.deinit();
+	var req  = try chip.request( &.{ 3, 4, 5, 6 } );
+	var line = try req.line( 4 );
 
-    try testing.expectEqual( .none, line.edge() );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
 
-    // try line.setEdge( .both );
+	try testing.expectEqual( .none, line.edge() );
 
-    // try testing.expectEqual( .both, line.edge() );
+	// try line.setEdge( .both );
 
-    // try line.setEdge( .none );
+	// try testing.expectEqual( .both, line.edge() );
+
+	// try line.setEdge( .none );
 }
 
 // -----------------------------------------------------------------------------
 
 test "line drive"
 {
-    var chip : Chip = .{};
-    var req         = chip.request( &.{ 3, 4, 5, 6 } );
-    var line        = req.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try req.init( "get line direction" );
-    defer req.deinit();
+	var req  = try chip.request( &.{ 3, 4, 5, 6 } );
+	var line = try req.line( 4 );
 
-    try testing.expectEqual( .none, line.drive() );
+	try req.reserve( "testing", 0, &.{} );
+	defer req.release();
 
-    // try line.setDrive( .open_source );
+	try testing.expectEqual( .none, line.drive() );
 
-    // try testing.expectEqual( .open_source, line.drive() );
+	// try line.setDrive( .open_source );
+
+	// try testing.expectEqual( .open_source, line.drive() );
 }
 
 // -----------------------------------------------------------------------------
 
 test "get line clock"
 {
-    var chip : Chip = .{};
-    var line        = chip.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try testing.expectEqual( .none, line.clock() );
+	var line = try chip.line( 4 );
+
+	try testing.expectEqual( .none, line.clock() );
 }
 
 // -----------------------------------------------------------------------------
 
 test "get line isActiveLow"
 {
-    var chip : Chip = .{};
-    var line        = chip.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try testing.expectEqual( false, line.isActiveLow() );
+	var line = try chip.line( 4 );
+
+	try testing.expectEqual( false, line.isActiveLow() );
 }
 
 // -----------------------------------------------------------------------------
 
 test "get line isUsed"
 {
-    var chip : Chip = .{};
-    var line        = chip.line( 4 );
+	log.warn( "", .{} );
+	defer log.warn( "▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂", .{} );
 
-    try chip.init( std.testing.allocator, chip_path );
-    defer chip.deinit();
+	var chip = try Chip.init( std.testing.allocator, chip_path );
+	defer chip.deinit();
 
-    try testing.expectEqual( false, line.isUsed() ); // ## TODO ## Why is this false?
+	var line = try chip.line( 4 );
+
+	try testing.expectEqual( false, line.isUsed() ); // ## TODO ## Why is this false?
 }
