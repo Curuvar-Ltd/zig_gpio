@@ -2,7 +2,7 @@
 // DO NOT REMOVE ABOVE LINE -- zig's auto-formatting sucks.
 
 // =============================================================================
-//  Build the Curuvar zlibgpiod Library
+//  Build the Curuvar zig_gpio Library
 // =============================================================================
 
 const std = @import( "std" );
@@ -13,12 +13,12 @@ pub fn build( b : *std.Build ) void
     const optimize = b.standardOptimizeOption( .{} );
 
     // =========================================================================
-    //  Create the zlibgpiod module
+    //  Create the zig_gpio module
     // =========================================================================
 
-    _ = b.addModule( "zlibgpiod",
+    _ = b.addModule( "zig_gpio",
                      .{
-                         .root_source_file = .{ .path = "src/zlibgpiod.zig" },
+                         .root_source_file = b.path( "src/zig_gpio.zig" ),
                          .target           = target,
                          .optimize         = optimize,
                        } );
@@ -34,7 +34,7 @@ pub fn build( b : *std.Build ) void
 
     const chip_tests = b.addTest(
         .{
-            .root_source_file = .{ .path = "src/tests.zig" },
+            .root_source_file = .path( "src/tests.zig" ),
             .target           = target,
             .optimize         = optimize,
         } );
