@@ -1,9 +1,16 @@
 
-# zliggpio
+# zig_gpio
 
-zlibgpio is a Zig module for GPIO input and output.
+zig _gpio is a Zig module for GPIO input and output.
+
+It uses the POSIX GPIO API to control GPIO pins on a Raspberry Pi or another
+platform that has compatible GPIO.
+
+
 
 <<TBD>>
+
+
 
 ## A note on formatting
 

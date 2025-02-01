@@ -1,5 +1,4 @@
 // zig fmt: off
-// DO NOT REMOVE ABOVE LINE -- zig's auto-formatting sucks.
 
 //                Copyright (c) 2024, Curuvar Ltd.
 //                      All Rights Reserved
@@ -58,7 +57,7 @@ const log    = std.log.scoped( .chip_request );
 const assert = std.debug.assert;
 
 
-/// The Chip contining the requested lines.
+/// The Chip containing the requested lines.
 chip      : * const Chip,
 /// The stream used to control and read the requested lines.
 fd        : ?std.posix.fd_t = null,

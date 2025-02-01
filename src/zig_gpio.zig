@@ -1,7 +1,6 @@
 // zig fmt: off
-// DO NOT REMOVE ABOVE LINE -- zig's auto-formatting sucks.
 
-//                Copyright (c) 2024, Curuvar Ltd.
+//                Copyright (c) 2025, Curuvar Ltd.
 //                      All Rights Reserved
 //
 // SPDX-License-Identifier: BSD-3-Clause
@@ -32,4 +31,6 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-pub const Chip = @import( "chip.zig" );
+pub const Chip    = @import( "chip.zig" );
+pub const Request = @import( "chip-request.zig" );
+pub const Line    = @import( "chip-line.zig" );
